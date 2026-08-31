@@ -74,3 +74,37 @@ ssh -o StrictHostKeyChecking=no -R 0:127.0.0.1:8080 ClothoUseServerInforaqo17875
 - 平板访问：`https://你的域名`（需 HTTPS）
 
 登录账号：`admin` / `123456`（可在 `server.py` 中修改）
+
+## 🎮 使用说明
+
+1. 平板打开控制页面，点击「启动摄像头」
+2. 确保心率手环已与 ESP32 连接，ESP32 通过串口上报 `HR:xx,IBI:yy`
+3. AI 每 3 秒根据最新画面和心率数据自动决策，下发控制指令
+4. 如需语音输入，确保平板麦克风开启，并已下载 Vosk 中文模型放入 `models/vosk-model-cn-0.22`
+5. 随时点击「停止」可关闭摄像头和音频
+
+## 🔌 ESP32 固件
+
+固件位于 `esp32_firmware/esp32_firmware.ino`，使用 Arduino IDE 烧录。  
+需自行填写玩具的 BLE 服务 UUID 和特征 UUID（在 `sendToToy()` 函数中），并确认心率手环的连接参数。
+
+## ⚠️ 安全注意事项
+
+- **不要将 `.env`、`certs/`、`models/`、`ffmpeg.exe` 提交到 Git**（已通过 `.gitignore` 忽略）
+- 心率超过 130 会自动强制 STOP，请根据个人情况调整阈值
+- 蓝牙玩具物理强度上限已在固件中限制为 60%
+
+## 📚 常见问题
+
+### 平板提示无法访问摄像头？
+
+必须使用 HTTPS 访问控制页面（内网穿透通常自带证书）。
+
+### 语音识别不可用？
+
+检查 `vosk`、`pydub`、`ffmpeg` 是否安装，以及模型是否放在正确路径。  
+若麦克风损坏，可注释掉 `index.html` 中的 `recordAndUploadAudio()` 调用。
+
+### 串口连接失败？
+
+确认 ESP32 已插入并查看设备管理器中的 COM 口，修改 `.env` 中的 `SERIAL_PORT`。
