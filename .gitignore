@@ -1,40 +1,18 @@
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-env/
-venv/
-.venv/
-*.egg-info/
-dist/
-build/
+# 环境变量（包含密钥）
+.env
 
-# 运行时文件
+# 运行时生成的图片和心率数据
 latest.jpg
 latest_hr.json
+
+# 大文件：模型和 ffmpeg 可执行文件
+models/
+ffmpeg.exe
+
+# 日志和临时文件
 server.log
-session_log.csv
 temp_audio.wav
 
-# 证书
-certs/*.pem
-certs/*.key
-
-# 环境变量
-.env
-.env.local
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# 系统文件
-Thumbs.db
-.DS_Store
-
-# 日志
-*.log
+# Python 缓存
+__pycache__/
+*.pyccerts/

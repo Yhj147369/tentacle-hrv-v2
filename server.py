@@ -1,3 +1,19 @@
+# Tentacle HRV - 体感交互控制程序
+# Copyright (C) 2026 Yi Hengjun (伊恒君)
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 # -*- coding: utf-8 -*-
 """
 心率联动 AI 遥控服务
@@ -14,12 +30,16 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+# 新增下面这两行
+os.environ["PATH"] = os.path.dirname(__file__) + os.pathsep + os.environ["PATH"]
+
 import cv2
 import numpy as np
 import requests
 from flask import Flask, jsonify, render_template, request
 from flask_httpauth import HTTPBasicAuth
 from dotenv import load_dotenv
+
 
 load_dotenv()
 
@@ -427,7 +447,7 @@ def main_loop():
             log("[主循环] 异常: %s" % e)
         time.sleep(INTERVAL_SECONDS)
 
-app = Flask(__name__, template_folder=str(BASE_DIR))
+app = Flask(__name__, template_folder=str(BASE_DIR / "templates"))
 
 auth = HTTPBasicAuth()
 USERS = {"admin": "123456"}

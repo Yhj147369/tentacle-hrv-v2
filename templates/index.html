@@ -1,3 +1,19 @@
+# Tentacle HRV - 体感交互控制程序
+# Copyright (C) 2026 Yi Hengjun (伊恒君)
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -186,19 +202,42 @@
     }).catch(function(e){ console.warn('音频特征上传失败:', e); });
   }
 
-  // ====== 录音并上传 ======
+  // ====== 获取支持的音频 MIME 类型 ======
+  function getSupportedMimeType() {
+    var types = [
+      'audio/webm;codecs=opus',
+      'audio/webm',
+      'audio/mp4',
+      'audio/ogg;codecs=opus',
+      'audio/wav'
+    ];
+    for (var i = 0; i < types.length; i++) {
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported(types[i])) {
+        return types[i];
+      }
+    }
+    return '';
+  }
+
+  // ====== 初始化录音器 ======
   function startRecorder(stream) {
     try {
-      mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      var mimeType = getSupportedMimeType();
+      if (!mimeType) {
+        console.warn('浏览器不支持任何可用的录音格式');
+        mediaRecorder = null;
+        return;
+      }
+      mediaRecorder = new MediaRecorder(stream, { mimeType: mimeType });
       mediaRecorder.ondataavailable = function(event) {
         if (event.data.size > 0) recordedChunks.push(event.data);
       };
       mediaRecorder.onstop = function() {
         if (recordedChunks.length === 0) return;
-        var blob = new Blob(recordedChunks, { type: 'audio/webm' });
+        var blob = new Blob(recordedChunks, { type: mimeType });
         recordedChunks = [];
         var fd = new FormData();
-        fd.append('audio', blob, 'audio.webm');
+        fd.append('audio', blob, 'recording.' + mimeType.split(';')[0].split('/')[1]);
         fetch('/upload_audio', { method: 'POST', body: fd })
           .then(function(res){ return res.json(); })
           .then(function(data){
@@ -206,16 +245,23 @@
           })
           .catch(function(e){ console.warn('音频上传失败:', e); });
       };
-    } catch (e) { console.warn('录音初始化失败:', e); }
+    } catch (e) {
+      console.warn('录音初始化失败:', e);
+      mediaRecorder = null;
+    }
   }
 
   function recordAndUploadAudio() {
     if (!mediaRecorder || mediaRecorder.state === 'recording') return;
     recordedChunks = [];
-    mediaRecorder.start();
-    setTimeout(function(){
-      if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
-    }, 2000);
+    try {
+      mediaRecorder.start();
+      setTimeout(function(){
+        if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
+      }, 2000);
+    } catch (e) {
+      console.warn('录音启动失败:', e);
+    }
   }
 
   async function startCamera() {
