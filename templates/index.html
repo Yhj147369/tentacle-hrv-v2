@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>心率联动遥控 · 摄像头终端</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+         background: #0f1115; color: #e8eaed; max-width: 760px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  .sub { color: #9aa0a6; font-size: 13px; margin-bottom: 16px; }
+  .warn { background: #4a2c17; border: 1px solid #a4652a; color: #ffc46b;
+          padding: 10px 12px; border-radius: 8px; font-size: 13px; margin-bottom: 12px; }
+  .hidden { display: none; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; align-items: center; }
+  button { background: #1a73e8; color: #fff; border: 0; padding: 10px 16px; border-radius: 8px;
+           font-size: 14px; cursor: pointer; }
+  button:disabled { background: #3c4043; cursor: not-allowed; }
+  button.gray { background: #3c4043; }
+  label { font-size: 13px; color: #9aa0a6; }
+  input[type=number] { width: 70px; padding: 6px; border-radius: 6px; border: 1px solid #5f6368;
+                       background: #202124; color: #e8eaed; font-size: 14px; }
+  video { width: 100%; border-radius: 12px; background: #000; margin-bottom: 12px; }
+  .status { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 8px; font-size: 13px; margin-bottom: 12px; }
+  .status div { background: #202124; border-radius: 8px; padding: 8px 10px; }
+  .status b { display: block; margin-top: 2px; color: #fff; font-weight: 600; }
+  .ok { color: #81c995; } .bad { color: #f28b82; }
+  .ai-panel { background: #0b0e12; border: 1px solid #2a2f36; border-radius: 10px;
+              padding: 12px; margin-bottom: 12px; }
+  .ai-panel h3 { font-size: 14px; color: #9aa0a6; margin-bottom: 10px; }
+  .narr { background: #13171d; border-left: 3px solid #2f81f7; border-radius: 6px;
+          padding: 8px 10px; margin-bottom: 8px; }
+  .narr-h { font-size: 12px; color: #7ab8e8; margin-bottom: 4px; font-weight: 600; }
+  .narr pre { white-space: pre-wrap; word-break: break-word; font-size: 13px;
+              font-family: ui-monospace, Consolas, monospace; color: #e8eaed; margin: 0; }
+  .ai-log { max-height: 220px; overflow-y: auto; }
+  .ai-log::-webkit-scrollbar { width: 6px; }
+  .ai-log::-webkit-scrollbar-thumb { background: #3c4043; border-radius: 3px; }
+  .op-empty { color: #9aa0a6; font-size: 13px; padding: 8px; }
+  .op-item { display: flex; gap: 8px; align-items: baseline; padding: 6px 4px;
+             border-bottom: 1px solid #1c2026; font-size: 12.5px; }
+  .op-ts { color: #7a8087; font-family: ui-monospace, Consolas, monospace; flex-shrink: 0; }
+  .op-ic { flex-shrink: 0; }
+  .op-act { color: #e8eaed; font-weight: 600; flex-shrink: 0; }
+  .op-det { color: #9aa0a6; word-break: break-word; }
+</style>
+</head>
+<body>
+  <h1>📷 摄像头终端</h1>
+  <div class="sub">每 3 秒拍照上传，AI 根据画面和心率输出控制指令</div>
+
+  <div id="secure-hint" class="warn hidden">
+    ⚠️ 当前为 http 非安全环境，浏览器禁止调用摄像头。请用 https 访问。
+  </div>
+
+  <div class="row">
+    <button id="btn-start">启动摄像头</button>
+    <button id="btn-stop" disabled>停止</button>
+    <button id="btn-switch" class="gray">切换前后摄像头</button>
+    <label>间隔(秒)<input id="interval" type="number" min="1" max="30" value="3"></label>
+  </div>
+
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="canvas" hidden></canvas>
+
+  <div class="status">
+    <div>上传状态 <b id="up-status">未开始</b></div>
+    <div>上次上传 <b id="up-time">-</b></div>
+    <div>服务器串口 <b id="srv-status">-</b></div>
+    <div>心率 <b id="hr">-</b></div>
+    <div>熔断提示 <b id="fuse">-</b></div>
+    <div>最后指令 <b id="cmd">-</b></div>
+  </div>
+
+  <div class="ai-panel">
+    <h3>🤖 AI 叙述 与 操作日志</h3>
+    <div class="narr"><div class="narr-h">🧠 AI 思考·叙述</div><pre id="ai-narr">(等待 AI 分析…)</pre></div>
+    <div class="narr"><div class="narr-h">📖 AI 回复·剧情</div><pre id="ai-reply">-</pre></div>
+    <div class="narr-h" style="margin:4px 0 6px;">🎮 操作日志</div>
+    <div class="ai-log" id="op-log"><div class="op-empty">(等待 AI 开始运行，请点「启动摄像头」…)</div></div>
+  </div>
+
+<script>
+(function () {
+  var video = document.getElementById('video');
+  var canvas = document.getElementById('canvas');
+  var intervalInput = document.getElementById('interval');
+  var upStatus = document.getElementById('up-status');
+  var upTime = document.getElementById('up-time');
+  var srvStatus = document.getElementById('srv-status');
+  var hrEl = document.getElementById('hr');
+  var fuseEl = document.getElementById('fuse');
+  var cmdEl = document.getElementById('cmd');
+  var aiNarr = document.getElementById('ai-narr');
+  var aiReply = document.getElementById('ai-reply');
+  var opLogEl = document.getElementById('op-log');
+  var btnStart = document.getElementById('btn-start');
+  var btnStop = document.getElementById('btn-stop');
+  var btnSwitch = document.getElementById('btn-switch');
+
+  var stream = null, facing = 'environment', timer = null, uploading = false;
+  var lastOpKey = '';
+  var iconMap = { image:'📷', cmd:'🎮', fuse:'⚠️', warn:'⚠️' };
+
+  // ====== 音频相关变量 ======
+  var audioContext = null;
+  var analyser = null;
+  var dataArray = null;
+  var mediaRecorder = null;
+  var recordedChunks = [];
+  var lastVolume = 0;
+
+  if (location.protocol !== 'https:' &&
+      location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+    document.getElementById('secure-hint').classList.remove('hidden');
+  }
+
+  function setStatus(t) { upStatus.textContent = t; }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c]; });
+  }
+  function renderOpLog(list) {
+    if (!list || !list.length) { return; }
+    var key = list.map(function(o){ return o.ts + o.action; }).join('|');
+    if (key === lastOpKey) { return; }
+    lastOpKey = key;
+    var h = '';
+    for (var i = list.length - 1; i >= 0; i--) {
+      var o = list[i];
+      var icon = iconMap[o.evt] || '•';
+      var ts = new Date(o.ts * 1000).toLocaleTimeString();
+      h += '<div class="op-item"><span class="op-ts">' + ts + '</span><span class="op-ic">' + icon + '</span>'
+         + '<span class="op-act">' + escapeHtml(o.action) + '</span><span class="op-det">' + escapeHtml(o.detail || '') + '</span></div>';
+    }
+    opLogEl.innerHTML = h;
+  }
+
+  // ====== 音频特征提取 ======
+  function initAudioCapture(stream) {
+    try {
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      analyser = audioContext.createAnalyser();
+      analyser.fftSize = 512;
+      var source = audioContext.createMediaStreamSource(stream);
+      source.connect(analyser);
+      dataArray = new Uint8Array(analyser.frequencyBinCount);
+    } catch (e) { console.warn('音频初始化失败:', e); }
+  }
+
+  function getAudioFeatures() {
+    if (!analyser) return null;
+    try {
+      analyser.getByteTimeDomainData(dataArray);
+      var sum = 0;
+      for (var i = 0; i < dataArray.length; i++) {
+        var val = (dataArray[i] - 128) / 128;
+        sum += val * val;
+      }
+      var rms = Math.sqrt(sum / dataArray.length);
+      var volume = Math.min(100, rms * 100);
+      var zeroCrossings = 0;
+      for (i = 1; i < dataArray.length; i++) {
+        if ((dataArray[i] - 128) * (dataArray[i-1] - 128) < 0) zeroCrossings++;
+      }
+      var pitch = zeroCrossings / dataArray.length;
+      return { volume: volume, pitch: pitch };
+    } catch (e) { return null; }
+  }
+
+  function uploadAudioFeatures() {
+    var features = getAudioFeatures();
+    if (!features) return;
+    var volumeChange = Math.abs(features.volume - lastVolume);
+    lastVolume = features.volume;
+    fetch('/upload_audio_features', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        volume: features.volume,
+        pitch: features.pitch,
+        volumeChange: volumeChange,
+        timestamp: Date.now()
+      })
+    }).catch(function(e){ console.warn('音频特征上传失败:', e); });
+  }
+
+  // ====== 录音并上传 ======
+  function startRecorder(stream) {
+    try {
+      mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      mediaRecorder.ondataavailable = function(event) {
+        if (event.data.size > 0) recordedChunks.push(event.data);
+      };
+      mediaRecorder.onstop = function() {
+        if (recordedChunks.length === 0) return;
+        var blob = new Blob(recordedChunks, { type: 'audio/webm' });
+        recordedChunks = [];
+        var fd = new FormData();
+        fd.append('audio', blob, 'audio.webm');
+        fetch('/upload_audio', { method: 'POST', body: fd })
+          .then(function(res){ return res.json(); })
+          .then(function(data){
+            if (data.text) console.log('[语音] 识别结果:', data.text);
+          })
+          .catch(function(e){ console.warn('音频上传失败:', e); });
+      };
+    } catch (e) { console.warn('录音初始化失败:', e); }
+  }
+
+  function recordAndUploadAudio() {
+    if (!mediaRecorder || mediaRecorder.state === 'recording') return;
+    recordedChunks = [];
+    mediaRecorder.start();
+    setTimeout(function(){
+      if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
+    }, 2000);
+  }
+
+  async function startCamera() {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: true
+      });
+      video.srcObject = stream;
+      await video.play();
+      btnStart.disabled = true; btnStop.disabled = false;
+      setStatus('摄像头已启动');
+
+      initAudioCapture(stream);
+      startRecorder(stream);
+
+      scheduleUpload();
+    } catch (e) {
+      setStatus('摄像头错误: ' + e.message);
+      alert('无法访问摄像头: ' + e.message + (location.protocol === 'http:' ? ' (请改用 https)' : ''));
+    }
+  }
+
+  function stopCamera() {
+    if (timer) { clearInterval(timer); timer = null; }
+    if (stream) { stream.getTracks().forEach(function (t) { t.stop(); }); stream = null; }
+    video.srcObject = null;
+    btnStart.disabled = false; btnStop.disabled = true;
+    setStatus('已停止');
+    if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
+    if (audioContext) audioContext.close();
+  }
+
+  function scheduleUpload() {
+    if (timer) clearInterval(timer);
+    timer = setInterval(function(){
+      uploadOnce();
+      uploadAudioFeatures();
+      recordAndUploadAudio();
+    }, Number(intervalInput.value || 3) * 1000);
+  }
+
+  function capture() {
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 480;
+    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+    return new Promise(function (resolve) { canvas.toBlob(resolve, 'image/jpeg', 0.85); });
+  }
+
+  async function uploadOnce() {
+    if (uploading) return;
+    uploading = true;
+    try {
+      var blob = await capture();
+      var fd = new FormData();
+      fd.append('image', blob, 'frame.jpg');
+      var resp = await fetch('/upload', { method: 'POST', body: fd });
+      var j = await resp.json();
+      upTime.textContent = new Date().toLocaleTimeString();
+      setStatus(j.ok ? '上传中…' : '上传失败: ' + (j.error || resp.status));
+    } catch (e) { setStatus('上传错误: ' + e.message); }
+    finally { uploading = false; }
+  }
+
+  btnStart.addEventListener('click', startCamera);
+  btnStop.addEventListener('click', stopCamera);
+  btnSwitch.addEventListener('click', function () {
+    facing = (facing === 'environment') ? 'user' : 'environment';
+    stopCamera();
+    setTimeout(startCamera, 300);
+  });
+  intervalInput.addEventListener('change', function () { if (timer) scheduleUpload(); });
+
+  setInterval(async function () {
+    try {
+      var r = await fetch('/api/status');
+      var s = await r.json();
+      srvStatus.textContent = s.serial_ok ? '在线' : '离线(无串口)';
+      srvStatus.className = s.serial_ok ? 'ok' : 'bad';
+      hrEl.textContent = s.hr ? (s.hr + ' bpm') : '-';
+      fuseEl.textContent = s.fuse_reason || '-';
+      cmdEl.textContent = s.last_command || '-';
+      aiNarr.textContent = s.ai_reasoning || '(本轮无思考)';
+      aiReply.textContent = s.ai_text || '(等待)';
+      renderOpLog(s.op_log || []);
+    } catch (e) { srvStatus.textContent = '连接失败'; srvStatus.className = 'bad'; }
+  }, 2000);
+})();
+</script>
+</body>
+</html>

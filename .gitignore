@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# 运行时文件
+latest.jpg
+latest_hr.json
+server.log
+session_log.csv
+temp_audio.wav
+
+# 证书
+certs/*.pem
+certs/*.key
+
+# 环境变量
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 系统文件
+Thumbs.db
+.DS_Store
+
+# 日志
+*.log
