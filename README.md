@@ -5,11 +5,11 @@
 
 ## ✨ 功能特性
 
-- 📷 平板摄像头每 3 秒拍照上传，AI 实时分析画面
+-📷 平板摄像头每3秒拍照上传，AI 实时分析画面
 - ❤️ 通过 ESP32 读取心率手环数据（HR/IBI），支持心率熔断与限幅
-- 🧠 DeepSeek 多模态模型决策，输出 `SET 强度 时长 波形` 或 `STOP` 指令
-- 🔊 可选语音识别（Vosk 中文模型），让 AI 理解玩家语音
-- 🎛️ 内网穿透支持，平板可通过 HTTPS 远程访问
+-🧠 DeepSeek 多模态模型决策，输出`SET 强度时长波形`或`STOP`指令
+-🔊 可选语音识别（Vosk 中文模型），让 AI 理解玩家语音
+-️内网穿透支持，平板可通过 HTTPS 远程访问
 - 🛡️ 安全策略：心率 >130 强制 STOP，110~130 限幅 50%，图片超时暂停 AI
 
 ## 🔧 硬件需求
@@ -27,15 +27,14 @@
 ```bash
 pip install -r requirements.txt
 
-## 额外可选依赖（用于语音识别）：
-
+额外可选依赖（用于语音识别）：
 vosk、pydub、ffmpeg（已包含在 requirements.txt，但需手动下载模型）
 
-## 🚀 快速开始
-1.配置环境变量
-复制.env.example 为.env（或手动创建），填写以下内容：
+## 🚀快速开始
+1. 配置环境变量
+复制 .env.example 为 .env（或手动创建），填写以下内容：
 
-##.env
+ini
 DEEPSEEK_API_KEY=你的DeepSeek密钥
 DEEPSEEK_MODEL=deepseek-v4-flash-vision-exp
 DEEPSEEK_BASE_URL=https://api.deepseek.com
@@ -44,21 +43,21 @@ SERIAL_BAUD=115200
 INTERVAL_SECONDS=3
 IMAGE_MAX_WIDTH=640
 IMAGE_STALE_TIMEOUT=10
-2.启动后端服务
+2. 启动后端服务
 bash
 cd tentacle-hrv
 python server.py --port 8080
-看到服务启动:http://0.0.0.0:8080/即表示成功。
+看到 服务启动: http://0.0.0.0:8080/ 即表示成功。
 
-3.启动内网穿透（可选，供平板外网访问）
-使用 i996 或其他隧道工具，将本地8080端口映射到公网 HTTPS。
+3. 启动内网穿透（可选，供平板外网访问）
+使用 i996 或其他隧道工具，将本地 8080 端口映射到公网 HTTPS。
 示例（i996）：
 
 bash
 ssh -o StrictHostKeyChecking=no -R 0:127.0.0.1:8080 ClothoUseServerInforaqo17875@v2.i996.me -p 8222
 平板访问 i996 提供的固定域名即可。
 
-4.打开平板控制页面
+4. 打开平板控制页面
 本机测试：http://127.0.0.1:8080
 
 平板访问：https://你的域名（需 HTTPS）
@@ -107,14 +106,3 @@ AI 每 3 秒根据最新画面和心率数据自动决策，下发控制指令
 DeepSeek API
 
 Vosk 语音识别
-
-text
-
----
-
-## 使用建议
-
-1. **替换占位符**：如 `.env.example` 可创建，实际密钥不要写死。  
-2. **补充实际 BLE 协议**：等玩具逆向完成后，可以在“ESP32 固件”一节添加具体 UUID 和指令格式。  
-3. **添加截图**：如果愿意，可以在 README 中插入控制面板截图，让项目更直观。
-
