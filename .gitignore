@@ -1,18 +1,21 @@
-# 环境变量（包含密钥）
+# Environment variables (contains secret keys)
 .env
 
-# 运行时生成的图片和心率数据
+# Runtime generated files
 latest.jpg
 latest_hr.json
 
-# 大文件：模型和 ffmpeg 可执行文件
+# Large files: models and ffmpeg executable
 models/
 ffmpeg.exe
 
-# 日志和临时文件
+# Logs and temporary files
 server.log
 temp_audio.wav
 
-# Python 缓存
+# Python cache
 __pycache__/
-*.pyccerts/
+*.pyc
+
+# SSL certificates and private keys (DO NOT COMMIT)
+certs/

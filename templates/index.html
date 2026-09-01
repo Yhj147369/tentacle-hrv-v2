@@ -1,3 +1,4 @@
+<!--
 # Tentacle HRV - 体感交互控制程序
 # Copyright (C) 2026 Yi Hengjun (伊恒君)
 #
@@ -13,7 +14,7 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
+-->
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -128,6 +129,15 @@
   var recordedChunks = [];
   var lastVolume = 0;
 
+  // ====== 认证 key 支持 ======
+  var accessKey = new URLSearchParams(window.location.search).get('key') || '';
+
+  function withKey(url) {
+    if (!accessKey) return url;
+    var separator = url.indexOf('?') !== -1 ? '&' : '?';
+    return url + separator + 'key=' + encodeURIComponent(accessKey);
+  }
+
   if (location.protocol !== 'https:' &&
       location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
     document.getElementById('secure-hint').classList.remove('hidden');
@@ -190,7 +200,7 @@
     if (!features) return;
     var volumeChange = Math.abs(features.volume - lastVolume);
     lastVolume = features.volume;
-    fetch('/upload_audio_features', {
+    fetch(withKey('/upload_audio_features'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -202,66 +212,36 @@
     }).catch(function(e){ console.warn('音频特征上传失败:', e); });
   }
 
-  // ====== 获取支持的音频 MIME 类型 ======
-  function getSupportedMimeType() {
-    var types = [
-      'audio/webm;codecs=opus',
-      'audio/webm',
-      'audio/mp4',
-      'audio/ogg;codecs=opus',
-      'audio/wav'
-    ];
-    for (var i = 0; i < types.length; i++) {
-      if (window.MediaRecorder && MediaRecorder.isTypeSupported(types[i])) {
-        return types[i];
-      }
-    }
-    return '';
-  }
-
-  // ====== 初始化录音器 ======
+  // ====== 录音并上传 ======
   function startRecorder(stream) {
     try {
-      var mimeType = getSupportedMimeType();
-      if (!mimeType) {
-        console.warn('浏览器不支持任何可用的录音格式');
-        mediaRecorder = null;
-        return;
-      }
-      mediaRecorder = new MediaRecorder(stream, { mimeType: mimeType });
+      mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
       mediaRecorder.ondataavailable = function(event) {
         if (event.data.size > 0) recordedChunks.push(event.data);
       };
       mediaRecorder.onstop = function() {
         if (recordedChunks.length === 0) return;
-        var blob = new Blob(recordedChunks, { type: mimeType });
+        var blob = new Blob(recordedChunks, { type: 'audio/webm' });
         recordedChunks = [];
         var fd = new FormData();
-        fd.append('audio', blob, 'recording.' + mimeType.split(';')[0].split('/')[1]);
-        fetch('/upload_audio', { method: 'POST', body: fd })
+        fd.append('audio', blob, 'audio.webm');
+        fetch(withKey('/upload_audio'), { method: 'POST', body: fd })
           .then(function(res){ return res.json(); })
           .then(function(data){
             if (data.text) console.log('[语音] 识别结果:', data.text);
           })
           .catch(function(e){ console.warn('音频上传失败:', e); });
       };
-    } catch (e) {
-      console.warn('录音初始化失败:', e);
-      mediaRecorder = null;
-    }
+    } catch (e) { console.warn('录音初始化失败:', e); }
   }
 
   function recordAndUploadAudio() {
     if (!mediaRecorder || mediaRecorder.state === 'recording') return;
     recordedChunks = [];
-    try {
-      mediaRecorder.start();
-      setTimeout(function(){
-        if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
-      }, 2000);
-    } catch (e) {
-      console.warn('录音启动失败:', e);
-    }
+    mediaRecorder.start();
+    setTimeout(function(){
+      if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
+    }, 2000);
   }
 
   async function startCamera() {
@@ -318,7 +298,7 @@
       var blob = await capture();
       var fd = new FormData();
       fd.append('image', blob, 'frame.jpg');
-      var resp = await fetch('/upload', { method: 'POST', body: fd });
+      var resp = await fetch(withKey('/upload'), { method: 'POST', body: fd });
       var j = await resp.json();
       upTime.textContent = new Date().toLocaleTimeString();
       setStatus(j.ok ? '上传中…' : '上传失败: ' + (j.error || resp.status));
@@ -337,7 +317,7 @@
 
   setInterval(async function () {
     try {
-      var r = await fetch('/api/status');
+      var r = await fetch(withKey('/api/status'));
       var s = await r.json();
       srvStatus.textContent = s.serial_ok ? '在线' : '离线(无串口)';
       srvStatus.className = s.serial_ok ? 'ok' : 'bad';

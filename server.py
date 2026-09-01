@@ -15,6 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 # -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 心率联动 AI 遥控服务
 集成: 图片上传、心率读取、音频录制、语音识别、AI决策
@@ -29,8 +30,10 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
+from functools import wraps
 
 # 新增下面这两行
+import os
 os.environ["PATH"] = os.path.dirname(__file__) + os.pathsep + os.environ["PATH"]
 
 import cv2
@@ -87,9 +90,14 @@ WAVE_SET = ("constant", "sine", "pulse", "random")
 # ========== Vosk 语音识别初始化 ==========
 VOSK_MODEL_PATH = BASE_DIR / "models" / "vosk-model-cn-0.22"
 if HAS_VOSK and VOSK_MODEL_PATH.exists():
-    vosk_model = vosk.Model(str(VOSK_MODEL_PATH))
-    vosk_recognizer = vosk.KaldiRecognizer(vosk_model, 16000)
-    print("[语音] Vosk 模型已加载")
+    try:
+        vosk_model = vosk.Model(str(VOSK_MODEL_PATH))
+        vosk_recognizer = vosk.KaldiRecognizer(vosk_model, 16000)
+        print("[语音] Vosk 模型已加载")
+    except Exception as e:
+        vosk_recognizer = None
+        print(f"[语音] Vosk 模型加载失败: {e}")
+        print("[语音] 语音识别不可用，但不影响其他功能")
 elif HAS_VOSK:
     vosk_recognizer = None
     print("[语音] 未找到 Vosk 模型，请下载并放入 models/vosk-model-cn-0.22")
@@ -447,18 +455,32 @@ def main_loop():
             log("[主循环] 异常: %s" % e)
         time.sleep(INTERVAL_SECONDS)
 
+# ==================== 认证部分（修改） ====================
 app = Flask(__name__, template_folder=str(BASE_DIR / "templates"))
 
 auth = HTTPBasicAuth()
 USERS = {"admin": "123456"}
+ACCESS_KEY = "123456"  # URL参数 key 值，可根据需要修改
+
 @auth.verify_password
 def verify_password(username, password):
     if username in USERS and USERS[username] == password:
         return username
     return None
 
+def require_access(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        # 先检查 URL 参数 key 是否正确
+        if request.args.get("key") == ACCESS_KEY:
+            return f(*args, **kwargs)
+        # 否则走 Basic Auth
+        return auth.login_required(f)(*args, **kwargs)
+    return decorated
+# ========================================================
+
 @app.route("/")
-@auth.login_required
+@require_access
 def index():
     return render_template("index.html")
 
@@ -474,7 +496,7 @@ def test():
     return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>test</title></head><body><h1 style="font-size:64px;text-align:center;margin-top:40vh">平板渲染测试 OK</h1><p style="text-align:center;font-size:24px">纯 HTML 页面，无 JavaScript</p></body></html>'
 
 @app.route("/upload", methods=["POST"])
-@auth.login_required
+@require_access
 def upload():
     data = request.get_data()
     if request.content_type and "multipart" in request.content_type:
@@ -490,7 +512,7 @@ def upload():
     return jsonify({"ok": True, "size": int(len(buf))})
 
 @app.route("/upload_audio", methods=["POST"])
-@auth.login_required
+@require_access
 def upload_audio():
     global latest_audio_text
     if 'audio' not in request.files:
@@ -511,7 +533,7 @@ def upload_audio():
     return jsonify({"ok": True, "text": text or ""}), 200
 
 @app.route("/upload_audio_features", methods=["POST"])
-@auth.login_required
+@require_access
 def upload_audio_features():
     global latest_audio_features
     data = request.get_json()
@@ -526,14 +548,14 @@ def upload_audio_features():
     return jsonify({"ok": False}), 400
 
 @app.route("/latest.jpg")
-@auth.login_required
+@require_access
 def latest_jpg():
     if LATEST_JPG.exists():
         return LATEST_JPG.read_bytes(), 200, {"Content-Type": "image/jpeg"}
     return jsonify({"ok": False, "error": "暂无图片"}), 404
 
 @app.route("/api/status")
-@auth.login_required
+@require_access
 def api_status():
     with _lock: s = dict(_state)
     with _lock: s["op_log"] = list(op_log[-MAX_OP_LOG:])
@@ -541,7 +563,7 @@ def api_status():
     return jsonify(s)
 
 @app.route("/api/command", methods=["POST"])
-@auth.login_required
+@require_access
 def api_command():
     body = request.get_json(force=True, silent=True) or {}
     cmd = str(body.get("cmd") or "").strip()
