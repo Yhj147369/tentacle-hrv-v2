@@ -20,6 +20,7 @@
 集成: 图片上传、心率读取、音频录制、语音识别、AI决策
 安全: 心率熔断、图片超时停用AI
 新增: 随机事件系统（DLC3）
+新增: TTS 语音合成接口（DLC1）
 """
 import argparse
 import base64
@@ -44,6 +45,10 @@ from flask import Flask, jsonify, render_template, request
 from flask_httpauth import HTTPBasicAuth
 from dotenv import load_dotenv
 
+# ---------- 新增：TTS 依赖 ----------
+import asyncio
+import tempfile
+import edge_tts
 
 load_dotenv()
 
@@ -652,7 +657,6 @@ def event_choice():
     if not option_text:
         return jsonify({"ok": False, "error": "empty option"}), 400
 
-    # 记录玩家历史选择
     with _lock:
         player_choices_log.append({
             "event_id": active_event.get("id") if active_event else "unknown",
@@ -662,7 +666,6 @@ def event_choice():
         if len(player_choices_log) > MAX_CHOICE_LOG:
             del player_choices_log[:len(player_choices_log) - MAX_CHOICE_LOG]
 
-    # 将玩家选择作为下一次 AI 输入
     with _lock:
         latest_audio_text = f"玩家选择了：{option_text}"
         latest_audio_features = {"volume": 0, "pitch": 0, "volumeChange": 0, "timestamp": 0}
@@ -680,6 +683,37 @@ def api_command():
         return jsonify({"ok": False, "error": "指令格式错误, 示例: SET 30 10 sine 或 STOP"}), 400
     ok = send_command(cmd, source="手动")
     return jsonify({"ok": ok, "cmd": cmd})
+
+# ---------- 新增：TTS 接口 ----------
+@app.route("/tts", methods=["POST"])
+@require_access
+def tts():
+    data = request.get_json(force=True, silent=True) or {}
+    text = str(data.get("text") or "").strip()
+    if not text:
+        return jsonify({"ok": False, "error": "empty text"}), 400
+    if len(text) > 500:
+        text = text[:500]  # 限制长度，避免生成时间过长
+
+    try:
+        voice = "zh-CN-XiaoxiaoNeural"  # 中文女声，可换其他
+        communicate = edge_tts.Communicate(text, voice)
+
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
+            temp_path = f.name
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(communicate.save(temp_path))
+        loop.close()
+
+        with open(temp_path, "rb") as f:
+            audio_data = f.read()
+        os.unlink(temp_path)
+
+        return audio_data, 200, {"Content-Type": "audio/mpeg"}
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="心率联动 AI 遥控服务")

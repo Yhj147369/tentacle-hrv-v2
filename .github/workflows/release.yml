@@ -1,0 +1,71 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  check-and-package:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install flake8
+
+      - name: Lint with flake8
+        run: |
+          flake8 server.py --count --select=E9,F63,F7,F82 --show-source --statistics
+
+      - name: Package project
+        run: |
+          zip -r tentacle-hrv-${{ github.ref_name }}.zip . \
+            -x "*.git*" \
+            -x "models/*" \
+            -x "ffmpeg.exe" \
+            -x "certs/*" \
+            -x ".env" \
+            -x "latest.jpg" \
+            -x "latest_hr.json" \
+            -x "server.log" \
+            -x "temp_audio.wav" \
+            -x "__pycache__/*" \
+            -x "*.pyc"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: tentacle-hrv-${{ github.ref_name }}.zip
+          name: Release ${{ github.ref_name }}
+          body: |
+            ## Tentacle HRV 自动发布版本 ${{ github.ref_name }}
+            
+            本版本由 GitHub Actions 自动构建。
+            
+            ### 包含内容
+            - 后端服务 `server.py`
+            - 前端控制面板 `templates/index.html`
+            - ESP32 固件源码
+            - README、LICENSE、.gitignore
+            
+            ### 不包含
+            - 大型模型文件（`models/`）
+            - `ffmpeg.exe`
+            - SSL 证书 (`certs/`)
+            - 环境变量文件 `.env`
+            - 运行时生成的图片/心率/日志
+            
+            请自行准备上述文件后运行。
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
