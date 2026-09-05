@@ -21,7 +21,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>心率联动遥控 · 摄像头终端</title>
-<!-- Chart.js CDN -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -119,6 +118,7 @@
     <button id="btn-switch" class="gray">切换前后摄像头</button>
     <label>间隔(秒)<input id="interval" type="number" min="1" max="30" value="3"></label>
     <label><input type="checkbox" id="tts-enabled"> AI语音朗读</label>
+    <label><input type="checkbox" id="ambient-enabled"> 氛围音效</label>
   </div>
 
   <video id="video" autoplay playsinline muted></video>
@@ -635,7 +635,92 @@
     cmdChart.update('none');
   }
 
-  // 初始化图表
+  // ====== DLC8 氛围音效系统 ======
+  var ambientEnabled = false;
+  var ambientOscillator = null;
+  var ambientGain = null;
+  var ambientNoiseSource = null;
+  var ambientNoiseGain = null;
+
+  document.getElementById('ambient-enabled').addEventListener('change', function(e) {
+    ambientEnabled = e.target.checked;
+    if (ambientEnabled) {
+      startAmbient();
+    } else {
+      stopAmbient();
+    }
+  });
+
+  function startAmbient() {
+    if (ambientOscillator) return;
+    try {
+      var ctx = new (window.AudioContext || window.webkitAudioContext)();
+      // 主振荡器
+      ambientOscillator = ctx.createOscillator();
+      ambientOscillator.type = 'sine';
+      ambientOscillator.frequency.value = 220;
+      ambientGain = ctx.createGain();
+      ambientGain.gain.value = 0.0;
+      ambientOscillator.connect(ambientGain);
+      ambientGain.connect(ctx.destination);
+      ambientOscillator.start();
+
+      // 噪声源（可选）
+      var bufferSize = 2 * ctx.sampleRate;
+      var buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+      var data = buffer.getChannelData(0);
+      for (var i = 0; i < bufferSize; i++) {
+        data[i] = Math.random() * 2 - 1;
+      }
+      ambientNoiseSource = ctx.createBufferSource();
+      ambientNoiseSource.buffer = buffer;
+      ambientNoiseGain = ctx.createGain();
+      ambientNoiseGain.gain.value = 0.0;
+      ambientNoiseSource.connect(ambientNoiseGain);
+      ambientNoiseGain.connect(ctx.destination);
+      ambientNoiseSource.loop = true;
+      ambientNoiseSource.start();
+    } catch(e) { console.warn('氛围音效启动失败:', e); }
+  }
+
+  function stopAmbient() {
+    try {
+      if (ambientOscillator) { ambientOscillator.stop(); ambientOscillator = null; }
+      if (ambientNoiseSource) { ambientNoiseSource.stop(); ambientNoiseSource = null; }
+      if (ambientGain) { ambientGain.gain.value = 0; }
+      if (ambientNoiseGain) { ambientNoiseGain.gain.value = 0; }
+    } catch(e) {}
+  }
+
+  function updateAmbient(hr, lastCommand) {
+    if (!ambientEnabled || !ambientOscillator || !ambientGain) return;
+    var freq, vol, noiseVol;
+    if (hr === null || hr === undefined) {
+      freq = 180; vol = 0.02; noiseVol = 0.005;
+    } else if (hr > 130) {
+      freq = 440; vol = 0.12; noiseVol = 0.08;
+    } else if (hr >= 110) {
+      freq = 300; vol = 0.07; noiseVol = 0.04;
+    } else {
+      freq = 200; vol = 0.03; noiseVol = 0.01;
+    }
+    // 根据最后指令强度调整音量
+    if (lastCommand && lastCommand.indexOf('SET') === 0) {
+      var parts = lastCommand.split(' ');
+      if (parts.length >= 2) {
+        var level = parseInt(parts[1]) || 0;
+        vol += level * 0.001; // 轻微增加
+        noiseVol += level * 0.0005;
+      }
+    }
+    try {
+      ambientOscillator.frequency.value = freq;
+      ambientGain.gain.value = vol;
+      if (ambientNoiseGain) ambientNoiseGain.gain.value = noiseVol;
+    } catch(e) {}
+  }
+
+  // 初始化图表和角色加载
   initCharts();
   loadCustomRole();
 
@@ -670,6 +755,9 @@
       if (s.data_log) {
         updateCharts(s.data_log);
       }
+
+      // DLC8 更新氛围音效
+      updateAmbient(s.hr, s.last_command);
     } catch (e) { srvStatus.textContent = '连接失败'; srvStatus.className = 'bad'; }
   }, 2000);
 })();
