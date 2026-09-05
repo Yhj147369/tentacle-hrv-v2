@@ -24,6 +24,8 @@
 新增: 自定义角色接口（DLC5）
 新增: 对话记忆增强（DLC6）
 新增: 数据可视化面板（DLC7）后端支持
+新增: 声音氛围系统（DLC8）无需后端
+新增: Web 配置后台（DLC9）
 """
 import argparse
 import base64
@@ -85,49 +87,86 @@ SERIAL_PORT = os.environ.get("SERIAL_PORT", "COM3")
 SERIAL_BAUD = int(os.environ.get("SERIAL_BAUD", "115200"))
 INTERVAL_SECONDS = float(os.environ.get("INTERVAL_SECONDS", "3"))
 
-HR_STOP_ABOVE = 130
-HR_LIMIT_ABOVE = 110
-HR_LIMIT_MAX = 50
-PC_LEVEL_CAP = 80
-MAX_DURATION_S = 300
-HEARTBEAT_INTERVAL = 2.0
+# ===== 常量（之前可能遗漏，现在补充） =====
 IMAGE_MAX_WIDTH = 640
 IMAGE_STALE_TIMEOUT = 10
+HEARTBEAT_INTERVAL = 2.0
 WAVE_SET = ("constant", "sine", "pulse", "random")
 
-# ========== 事件系统初始化 ==========
-EVENTS_FILE = BASE_DIR / "events.json"
-EVENT_TIMEOUT = 15
+# ===== 动态配置（DLC9） =====
+config_lock = threading.Lock()
+config = {
+    "HR_STOP_ABOVE": 130,
+    "HR_LIMIT_ABOVE": 110,
+    "HR_LIMIT_MAX": 50,
+    "PC_LEVEL_CAP": 80,
+    "MAX_DURATION_S": 300,
+}
+
+def get_config(key, default=None):
+    with config_lock:
+        return config.get(key, default)
+
+def set_config(key, value):
+    with config_lock:
+        config[key] = value
+
+def get_current_thresholds():
+    with config_lock:
+        return dict(config)
+
+def get_hr_stop():
+    return get_config("HR_STOP_ABOVE", 130)
+def get_hr_limit():
+    return get_config("HR_LIMIT_ABOVE", 110)
+def get_hr_limit_max():
+    return get_config("HR_LIMIT_MAX", 50)
+def get_pc_level_cap():
+    return get_config("PC_LEVEL_CAP", 80)
+def get_max_duration():
+    return get_config("MAX_DURATION_S", 300)
+
+# ===== 事件系统初始化 =====
 EVENT_POOL = []
-try:
+EVENT_TIMEOUT = 15
+
+def load_events():
+    global EVENT_POOL, EVENT_TIMEOUT
+    EVENTS_FILE = BASE_DIR / "events.json"
     if EVENTS_FILE.exists():
-        with open(EVENTS_FILE, "r", encoding="utf-8") as f:
-            EVENT_CONFIG = json.load(f)
-        EVENT_TIMEOUT = int(EVENT_CONFIG.get("timeout_seconds", 15))
-        EVENT_POOL = EVENT_CONFIG.get("events", [])
-        print(f"[事件] 已加载 {len(EVENT_POOL)} 个事件")
+        try:
+            with open(EVENTS_FILE, "r", encoding="utf-8") as f:
+                EVENT_CONFIG = json.load(f)
+            EVENT_TIMEOUT = int(EVENT_CONFIG.get("timeout_seconds", 15))
+            EVENT_POOL = EVENT_CONFIG.get("events", [])
+            print(f"[事件] 已加载 {len(EVENT_POOL)} 个事件")
+            return True
+        except Exception as e:
+            print(f"[事件] 加载失败: {e}")
+            return False
     else:
         print("[事件] 未找到 events.json，事件系统禁用")
-except Exception as e:
-    print(f"[事件] 加载失败: {e}")
+        return False
+
+load_events()
 
 active_event = None
 event_timestamp = None
 player_choices_log = []
 MAX_CHOICE_LOG = 50
 
-# ========== 自定义角色 ==========
+# ===== 自定义角色 =====
 custom_system_prompt = None
 
-# ========== DLC6 对话记忆增强 ==========
+# ===== DLC6 对话记忆增强 =====
 conversation_history = []
-MAX_HISTORY = 20   # 最多保存20条交互记录，注入时取最近5条
+MAX_HISTORY = 20
 
-# ========== DLC7 数据可视化 ==========
+# ===== DLC7 数据可视化 =====
 data_log = []
-MAX_DATA_POINTS = 200   # 最多记录200条数据点
+MAX_DATA_POINTS = 200
 
-# ========== Vosk 语音识别初始化 ==========
+# ===== Vosk 语音识别初始化 =====
 VOSK_MODEL_PATH = BASE_DIR / "models" / "vosk-model-cn-0.22"
 if HAS_VOSK and VOSK_MODEL_PATH.exists():
     try:
@@ -399,7 +438,7 @@ def ask_deepseek(img_b64, hr, ibi):
         recent = player_choices_log[-5:]
         event_info = "【玩家历史选择】" + "; ".join([f"{c['option']}" for c in recent])
 
-    # ===== DLC6 历史摘要 =====
+    # DLC6 历史摘要
     history_text = ""
     if conversation_history:
         recent_hist = conversation_history[-5:]
@@ -439,7 +478,7 @@ def ask_deepseek(img_b64, hr, ibi):
             _state["ai_text"] = text
             _state["ai_reasoning"] = (reasoning or "")[:2000]
 
-        # ===== DLC6 记录历史 =====
+        # DLC6 记录历史
         with _lock:
             conversation_history.append({
                 "user": f"心率:{hr_txt}, IBI:{ibi_txt}, 语音:{audio_text or '无'}, 事件:{active_event['title'] if active_event else '无'}",
@@ -470,11 +509,17 @@ def clamp_command(cmd, hr):
     if not cmd.startswith("SET "): return cmd
     parts = cmd.split(); level = int(parts[1]); dur = int(parts[2]); wave = parts[3]
     reason = None
-    if hr is not None and hr > HR_STOP_ABOVE: return "STOP"
-    if hr is not None and hr >= HR_LIMIT_ABOVE:
-        level = min(level, HR_LIMIT_MAX); reason = "心率 %d 偏高, 限幅 %d" % (hr, HR_LIMIT_MAX)
-    level = min(level, PC_LEVEL_CAP)
-    dur = max(1, min(dur, MAX_DURATION_S))
+    hr_stop = get_hr_stop()
+    hr_limit = get_hr_limit()
+    hr_limit_max = get_hr_limit_max()
+    pc_cap = get_pc_level_cap()
+    max_dur = get_max_duration()
+
+    if hr is not None and hr > hr_stop: return "STOP"
+    if hr is not None and hr >= hr_limit:
+        level = min(level, hr_limit_max); reason = "心率 %d 偏高, 限幅 %d" % (hr, hr_limit_max)
+    level = min(level, pc_cap)
+    dur = max(1, min(dur, max_dur))
     with _lock: _state["fuse_reason"] = reason
     return "SET %d %d %s" % (level, dur, wave)
 
@@ -510,9 +555,11 @@ def main_loop():
                 time.sleep(INTERVAL_SECONDS)
                 continue
 
-            if hr is not None and hr > HR_STOP_ABOVE:
-                with _lock: _state["fuse_reason"] = "心率 %d > %d, 强制 STOP" % (hr, HR_STOP_ABOVE)
-                log_op("fuse", "心率过高熔断", "心率 %d > %d, 强制 STOP" % (hr, HR_STOP_ABOVE))
+            hr_stop = get_hr_stop()
+            hr_limit = get_hr_limit()
+            if hr is not None and hr > hr_stop:
+                with _lock: _state["fuse_reason"] = "心率 %d > %d, 强制 STOP" % (hr, hr_stop)
+                log_op("fuse", "心率过高熔断", "心率 %d > %d, 强制 STOP" % (hr, hr_stop))
                 send_command("STOP", source="熔断")
                 time.sleep(INTERVAL_SECONDS); continue
 
@@ -524,14 +571,15 @@ def main_loop():
                     event_id = m.group(1)
                     evt = next((e for e in EVENT_POOL if e.get("id") == event_id), None)
                     if evt:
-                        if hr is not None and hr > HR_STOP_ABOVE:
+                        hr_limit_max = get_hr_limit_max()
+                        if hr is not None and hr > hr_stop:
                             if not evt.get("relaxing", False):
                                 log_op("warn", "事件触发被熔断阻止", event_id)
                             else:
                                 active_event = evt
                                 event_timestamp = time.time()
                                 log_op("event", "触发放松事件", event_id)
-                        elif hr is not None and hr >= HR_LIMIT_ABOVE:
+                        elif hr is not None and hr >= hr_limit:
                             if evt.get("relaxing", False):
                                 active_event = evt
                                 event_timestamp = time.time()
@@ -565,7 +613,7 @@ def main_loop():
         except Exception as e:
             log("[主循环] 异常: %s" % e)
         finally:
-            # ===== DLC7 记录数据点 =====
+            # DLC7 记录数据点
             try:
                 with _lock:
                     data_log.append({
@@ -688,7 +736,7 @@ def api_status():
     s["now"] = time.time()
     s["active_event"] = active_event
     s["event_timestamp"] = event_timestamp
-    s["data_log"] = data_log  # DLC7
+    s["data_log"] = data_log
     return jsonify(s)
 
 @app.route("/api/event_choice", methods=["POST"])
@@ -709,7 +757,6 @@ def event_choice():
         if len(player_choices_log) > MAX_CHOICE_LOG:
             del player_choices_log[:len(player_choices_log) - MAX_CHOICE_LOG]
 
-        # ===== DLC6 记录事件选择到对话历史 =====
         conversation_history.append({
             "user": f"玩家在事件 {active_event.get('id') if active_event else 'unknown'} 中选择了：{option_text}",
             "ai": "(等待玩家行动)"
@@ -782,6 +829,35 @@ def custom_role():
             return jsonify({"ok": True, "message": "已恢复默认角色"})
     else:
         return jsonify({"ok": True, "custom_system_prompt": custom_system_prompt})
+
+# ---------- DLC9 Web 配置后台接口 ----------
+@app.route("/api/config", methods=["GET", "POST"])
+@require_access
+def api_config():
+    if request.method == "GET":
+        return jsonify({"ok": True, "config": get_current_thresholds()})
+    else:
+        data = request.get_json(force=True, silent=True) or {}
+        # 更新阈值
+        new_stop = data.get("HR_STOP_ABOVE")
+        if new_stop is not None and isinstance(new_stop, (int, float)):
+            set_config("HR_STOP_ABOVE", int(new_stop))
+        new_limit = data.get("HR_LIMIT_ABOVE")
+        if new_limit is not None and isinstance(new_limit, (int, float)):
+            set_config("HR_LIMIT_ABOVE", int(new_limit))
+        new_limit_max = data.get("HR_LIMIT_MAX")
+        if new_limit_max is not None and isinstance(new_limit_max, (int, float)):
+            set_config("HR_LIMIT_MAX", int(new_limit_max))
+        new_pc_cap = data.get("PC_LEVEL_CAP")
+        if new_pc_cap is not None and isinstance(new_pc_cap, (int, float)):
+            set_config("PC_LEVEL_CAP", int(new_pc_cap))
+        new_max_dur = data.get("MAX_DURATION_S")
+        if new_max_dur is not None and isinstance(new_max_dur, (int, float)):
+            set_config("MAX_DURATION_S", int(new_max_dur))
+        # 重新加载事件池
+        if data.get("reload_events"):
+            load_events()
+        return jsonify({"ok": True, "config": get_current_thresholds()})
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="心率联动 AI 遥控服务")

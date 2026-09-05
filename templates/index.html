@@ -102,6 +102,32 @@
   #event-options button:active {
     background: #1557b0;
   }
+
+  /* 管理后台弹窗样式 */
+  #admin-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.8);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #admin-panel {
+    background: #202124;
+    border-radius: 12px;
+    padding: 20px;
+    max-width: 400px;
+    width: 90%;
+  }
+  #admin-panel h3 { margin-bottom: 10px; font-size: 16px; }
+  #admin-panel label { display: block; margin-bottom: 6px; }
+  #admin-panel input[type=number] { width: 100%; padding: 6px; border-radius: 6px; border: 1px solid #5f6368;
+    background: #0f1115; color: #e8eaed; font-size: 14px; margin-bottom: 8px; }
+  #admin-panel button { margin-top: 6px; }
 </style>
 </head>
 <body>
@@ -119,6 +145,7 @@
     <label>间隔(秒)<input id="interval" type="number" min="1" max="30" value="3"></label>
     <label><input type="checkbox" id="tts-enabled"> AI语音朗读</label>
     <label><input type="checkbox" id="ambient-enabled"> 氛围音效</label>
+    <button id="btn-admin">⚙️ 管理后台</button>
   </div>
 
   <video id="video" autoplay playsinline muted></video>
@@ -188,6 +215,21 @@
       <div id="event-risk"></div>
       <div id="event-timer"></div>
       <div id="event-options"></div>
+    </div>
+  </div>
+
+  <!-- 管理后台弹窗 -->
+  <div id="admin-overlay" class="hidden">
+    <div id="admin-panel">
+      <h3>⚙️ 管理后台</h3>
+      <label>熔断阈值 (心率) <input type="number" id="cfg-stop" value="130"></label>
+      <label>限幅阈值 (心率) <input type="number" id="cfg-limit" value="110"></label>
+      <label>限幅最大强度 <input type="number" id="cfg-limit-max" value="50"></label>
+      <label>PC 强度上限 <input type="number" id="cfg-pc-cap" value="80"></label>
+      <label>最大时长(秒) <input type="number" id="cfg-max-dur" value="300"></label>
+      <button id="btn-save-config">保存配置</button>
+      <button id="btn-reload-events">重新加载事件池</button>
+      <button id="btn-close-admin">关闭</button>
     </div>
   </div>
 
@@ -655,7 +697,6 @@
     if (ambientOscillator) return;
     try {
       var ctx = new (window.AudioContext || window.webkitAudioContext)();
-      // 主振荡器
       ambientOscillator = ctx.createOscillator();
       ambientOscillator.type = 'sine';
       ambientOscillator.frequency.value = 220;
@@ -665,7 +706,6 @@
       ambientGain.connect(ctx.destination);
       ambientOscillator.start();
 
-      // 噪声源（可选）
       var bufferSize = 2 * ctx.sampleRate;
       var buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
       var data = buffer.getChannelData(0);
@@ -704,12 +744,11 @@
     } else {
       freq = 200; vol = 0.03; noiseVol = 0.01;
     }
-    // 根据最后指令强度调整音量
     if (lastCommand && lastCommand.indexOf('SET') === 0) {
       var parts = lastCommand.split(' ');
       if (parts.length >= 2) {
         var level = parseInt(parts[1]) || 0;
-        vol += level * 0.001; // 轻微增加
+        vol += level * 0.001;
         noiseVol += level * 0.0005;
       }
     }
@@ -719,6 +758,61 @@
       if (ambientNoiseGain) ambientNoiseGain.gain.value = noiseVol;
     } catch(e) {}
   }
+
+  // ====== DLC9 管理后台 ======
+  var btnAdmin = document.getElementById('btn-admin');
+  var adminOverlay = document.getElementById('admin-overlay');
+  var btnCloseAdmin = document.getElementById('btn-close-admin');
+  var btnSaveConfig = document.getElementById('btn-save-config');
+  var btnReloadEvents = document.getElementById('btn-reload-events');
+
+  btnAdmin.addEventListener('click', function() {
+    adminOverlay.classList.remove('hidden');
+    fetch(withKey('/api/config')).then(r=>r.json()).then(j=>{
+      if (j.ok) {
+        document.getElementById('cfg-stop').value = j.config.HR_STOP_ABOVE;
+        document.getElementById('cfg-limit').value = j.config.HR_LIMIT_ABOVE;
+        document.getElementById('cfg-limit-max').value = j.config.HR_LIMIT_MAX;
+        document.getElementById('cfg-pc-cap').value = j.config.PC_LEVEL_CAP;
+        document.getElementById('cfg-max-dur').value = j.config.MAX_DURATION_S;
+      }
+    });
+  });
+
+  btnCloseAdmin.addEventListener('click', function() {
+    adminOverlay.classList.add('hidden');
+  });
+
+  btnSaveConfig.addEventListener('click', async function() {
+    var payload = {
+      HR_STOP_ABOVE: parseInt(document.getElementById('cfg-stop').value),
+      HR_LIMIT_ABOVE: parseInt(document.getElementById('cfg-limit').value),
+      HR_LIMIT_MAX: parseInt(document.getElementById('cfg-limit-max').value),
+      PC_LEVEL_CAP: parseInt(document.getElementById('cfg-pc-cap').value),
+      MAX_DURATION_S: parseInt(document.getElementById('cfg-max-dur').value)
+    };
+    try {
+      const resp = await fetch(withKey('/api/config'), {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+      });
+      const j = await resp.json();
+      if (j.ok) alert('配置已保存');
+    } catch(e) { console.warn(e); }
+  });
+
+  btnReloadEvents.addEventListener('click', async function() {
+    try {
+      const resp = await fetch(withKey('/api/config'), {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({reload_events: true})
+      });
+      const j = await resp.json();
+      if (j.ok) alert('事件池已重新加载');
+    } catch(e) { console.warn(e); }
+  });
 
   // 初始化图表和角色加载
   initCharts();
