@@ -22,6 +22,7 @@
 新增: 随机事件系统（DLC3）
 新增: TTS 语音合成接口（DLC1）
 新增: 自定义角色接口（DLC5）
+新增: 对话记忆增强（DLC6）
 """
 import argparse
 import base64
@@ -116,6 +117,10 @@ MAX_CHOICE_LOG = 50
 
 # ========== 自定义角色 ==========
 custom_system_prompt = None
+
+# ========== DLC6 对话记忆增强 ==========
+conversation_history = []
+MAX_HISTORY = 20   # 最多保存20条交互记录，注入时取最近5条
 
 # ========== Vosk 语音识别初始化 ==========
 VOSK_MODEL_PATH = BASE_DIR / "models" / "vosk-model-cn-0.22"
@@ -389,7 +394,14 @@ def ask_deepseek(img_b64, hr, ibi):
         recent = player_choices_log[-5:]
         event_info = "【玩家历史选择】" + "; ".join([f"{c['option']}" for c in recent])
 
-    # 使用自定义 prompt（如果设置了）
+    # ===== DLC6 历史摘要 =====
+    history_text = ""
+    if conversation_history:
+        recent_hist = conversation_history[-5:]
+        history_text = "【近期互动历史】\n" + "\n".join([
+            f"玩家: {h['user']}\nAI: {h['ai']}" for h in recent_hist
+        ])
+
     system_prompt = custom_system_prompt if custom_system_prompt else SYSTEM_PROMPT
 
     payload = {
@@ -397,7 +409,7 @@ def ask_deepseek(img_b64, hr, ibi):
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": [
-                {"type": "text", "text": f"当前心率: {hr_txt}, IBI: {ibi_txt}。{audio_info}{event_info}请输出控制指令。"},
+                {"type": "text", "text": f"{history_text}\n当前心率: {hr_txt}, IBI: {ibi_txt}。{audio_info}{event_info}请输出控制指令。"},
                 {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + img_b64}},
             ]},
         ],
@@ -421,6 +433,16 @@ def ask_deepseek(img_b64, hr, ibi):
             _state["ai_error"] = None
             _state["ai_text"] = text
             _state["ai_reasoning"] = (reasoning or "")[:2000]
+
+        # ===== DLC6 记录历史 =====
+        with _lock:
+            conversation_history.append({
+                "user": f"心率:{hr_txt}, IBI:{ibi_txt}, 语音:{audio_text or '无'}, 事件:{active_event['title'] if active_event else '无'}",
+                "ai": text
+            })
+            if len(conversation_history) > MAX_HISTORY:
+                del conversation_history[:len(conversation_history) - MAX_HISTORY]
+
         return text
     except Exception as e:
         with _lock: _state["ai_error"] = str(e)
@@ -662,6 +684,14 @@ def event_choice():
         })
         if len(player_choices_log) > MAX_CHOICE_LOG:
             del player_choices_log[:len(player_choices_log) - MAX_CHOICE_LOG]
+
+        # ===== DLC6 记录事件选择到对话历史 =====
+        conversation_history.append({
+            "user": f"玩家在事件 {active_event.get('id') if active_event else 'unknown'} 中选择了：{option_text}",
+            "ai": "(等待玩家行动)"
+        })
+        if len(conversation_history) > MAX_HISTORY:
+            del conversation_history[:len(conversation_history) - MAX_HISTORY]
 
     with _lock:
         latest_audio_text = f"玩家选择了：{option_text}"
