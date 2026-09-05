@@ -7,3 +7,4 @@ requests>=2.31.0
 vosk>=0.3.45
 pydub>=0.25.1
 python-dotenv>=1.0.0
+edge-tts>=7.0.0

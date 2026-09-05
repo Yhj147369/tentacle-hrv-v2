@@ -116,6 +116,7 @@
     <button id="btn-stop" disabled>停止</button>
     <button id="btn-switch" class="gray">切换前后摄像头</button>
     <label>间隔(秒)<input id="interval" type="number" min="1" max="30" value="3"></label>
+    <label><input type="checkbox" id="tts-enabled"> AI语音朗读</label>
   </div>
 
   <video id="video" autoplay playsinline muted></video>
@@ -178,6 +179,11 @@
   var mediaRecorder = null;
   var recordedChunks = [];
   var lastVolume = 0;
+
+  // ====== TTS 语音朗读变量 ======
+  var ttsEnabled = false;
+  var lastAiText = '';
+  var audioPlayer = new Audio();
 
   // ====== 认证 key 支持 ======
   var accessKey = new URLSearchParams(window.location.search).get('key') || '';
@@ -412,6 +418,28 @@
     } catch(e) { console.warn('事件选项提交异常:', e); }
   }
 
+  // ====== TTS 语音朗读 ======
+  document.getElementById('tts-enabled').addEventListener('change', function(e) {
+    ttsEnabled = e.target.checked;
+  });
+
+  async function fetchTTS(text) {
+    try {
+      const resp = await fetch(withKey('/tts'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: text })
+      });
+      if (!resp.ok) throw new Error('TTS请求失败');
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      audioPlayer.src = url;
+      audioPlayer.play();
+    } catch (e) {
+      console.warn('TTS失败:', e);
+    }
+  }
+
   setInterval(async function () {
     try {
       var r = await fetch(withKey('/api/status'));
@@ -431,6 +459,12 @@
       } else if (!s.active_event) {
         activeEventId = null;
         document.getElementById('event-overlay').classList.add('hidden');
+      }
+
+      // TTS：当AI回复更新且开启语音朗读时
+      if (ttsEnabled && s.ai_text && s.ai_text !== lastAiText) {
+        lastAiText = s.ai_text;
+        fetchTTS(s.ai_text);
       }
     } catch (e) { srvStatus.textContent = '连接失败'; srvStatus.className = 'bad'; }
   }, 2000);
