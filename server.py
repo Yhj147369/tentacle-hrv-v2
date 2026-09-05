@@ -23,6 +23,7 @@
 新增: TTS 语音合成接口（DLC1）
 新增: 自定义角色接口（DLC5）
 新增: 对话记忆增强（DLC6）
+新增: 数据可视化面板（DLC7）后端支持
 """
 import argparse
 import base64
@@ -121,6 +122,10 @@ custom_system_prompt = None
 # ========== DLC6 对话记忆增强 ==========
 conversation_history = []
 MAX_HISTORY = 20   # 最多保存20条交互记录，注入时取最近5条
+
+# ========== DLC7 数据可视化 ==========
+data_log = []
+MAX_DATA_POINTS = 200   # 最多记录200条数据点
 
 # ========== Vosk 语音识别初始化 ==========
 VOSK_MODEL_PATH = BASE_DIR / "models" / "vosk-model-cn-0.22"
@@ -484,6 +489,8 @@ def main_loop():
     last_beat = 0.0
     frame = 0
     while True:
+        hr = None
+        ibi = None
         try:
             now = time.time()
             if now - last_beat >= HEARTBEAT_INTERVAL:
@@ -557,6 +564,22 @@ def main_loop():
                 log_op("warn", "AI 输出无法解析", repr(text)[:120])
         except Exception as e:
             log("[主循环] 异常: %s" % e)
+        finally:
+            # ===== DLC7 记录数据点 =====
+            try:
+                with _lock:
+                    data_log.append({
+                        "ts": time.time(),
+                        "hr": hr,
+                        "ibi": ibi,
+                        "command": _state.get("last_command"),
+                        "fuse": _state.get("fuse_reason"),
+                        "ai_text": _state.get("ai_text") or ""
+                    })
+                    if len(data_log) > MAX_DATA_POINTS:
+                        del data_log[:len(data_log) - MAX_DATA_POINTS]
+            except Exception:
+                pass
         time.sleep(INTERVAL_SECONDS)
 
 # ==================== 认证部分 ====================
@@ -665,6 +688,7 @@ def api_status():
     s["now"] = time.time()
     s["active_event"] = active_event
     s["event_timestamp"] = event_timestamp
+    s["data_log"] = data_log  # DLC7
     return jsonify(s)
 
 @app.route("/api/event_choice", methods=["POST"])

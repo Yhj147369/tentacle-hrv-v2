@@ -21,6 +21,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>心率联动遥控 · 摄像头终端</title>
+<!-- Chart.js CDN -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
@@ -161,6 +163,13 @@
         <button id="btn-reset-role">恢复默认</button>
       </div>
     </div>
+  </div>
+
+  <!-- 数据可视化面板 -->
+  <div class="chart-panel" style="background:#202124;border-radius:8px;padding:10px;margin-bottom:12px;">
+    <h3 style="font-size:14px;color:#9aa0a6;margin-bottom:8px;">📊 数据可视化</h3>
+    <canvas id="hrChart" height="100"></canvas>
+    <canvas id="cmdChart" height="80" style="margin-top:10px;"></canvas>
   </div>
 
   <div class="ai-panel">
@@ -551,7 +560,83 @@
     btnSaveRole.click();
   });
 
-  // 初始化时尝试加载已有角色
+  // ====== 数据可视化 ======
+  var hrChart = null;
+  var cmdChart = null;
+
+  function initCharts() {
+    var hrCtx = document.getElementById('hrChart').getContext('2d');
+    var cmdCtx = document.getElementById('cmdChart').getContext('2d');
+    hrChart = new Chart(hrCtx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [{
+          label: '心率 (bpm)',
+          data: [],
+          borderColor: '#ff6b6b',
+          backgroundColor: 'rgba(255,107,107,0.2)',
+          fill: true,
+          tension: 0.3
+        }]
+      },
+      options: {
+        responsive: true,
+        animation: false,
+        scales: {
+          x: { display: false },
+          y: { beginAtZero: true, max: 150 }
+        }
+      }
+    });
+
+    cmdChart = new Chart(cmdCtx, {
+      type: 'bar',
+      data: {
+        labels: [],
+        datasets: [{
+          label: '指令强度',
+          data: [],
+          backgroundColor: '#4dabf7'
+        }]
+      },
+      options: {
+        responsive: true,
+        animation: false,
+        scales: {
+          x: { display: false },
+          y: { beginAtZero: true, max: 100 }
+        }
+      }
+    });
+  }
+
+  function updateCharts(dataLog) {
+    if (!hrChart || !cmdChart) return;
+    var labels = [];
+    var hrData = [];
+    var cmdData = [];
+    dataLog.forEach(function(d) {
+      var time = new Date(d.ts * 1000).toLocaleTimeString();
+      labels.push(time);
+      hrData.push(d.hr || 0);
+      var level = 0;
+      if (d.command && d.command.indexOf('SET') === 0) {
+        var parts = d.command.split(' ');
+        if (parts.length >= 2) level = parseInt(parts[1]) || 0;
+      }
+      cmdData.push(level);
+    });
+    hrChart.data.labels = labels;
+    hrChart.data.datasets[0].data = hrData;
+    hrChart.update('none');
+    cmdChart.data.labels = labels;
+    cmdChart.data.datasets[0].data = cmdData;
+    cmdChart.update('none');
+  }
+
+  // 初始化图表
+  initCharts();
   loadCustomRole();
 
   setInterval(async function () {
@@ -579,6 +664,11 @@
       if (ttsEnabled && s.ai_text && s.ai_text !== lastAiText) {
         lastAiText = s.ai_text;
         fetchTTS(s.ai_text);
+      }
+
+      // DLC7 更新图表
+      if (s.data_log) {
+        updateCharts(s.data_log);
       }
     } catch (e) { srvStatus.textContent = '连接失败'; srvStatus.className = 'bad'; }
   }, 2000);
