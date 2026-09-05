@@ -21,6 +21,7 @@
 安全: 心率熔断、图片超时停用AI
 新增: 随机事件系统（DLC3）
 新增: TTS 语音合成接口（DLC1）
+新增: 自定义角色接口（DLC5）
 """
 import argparse
 import base64
@@ -32,9 +33,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 from functools import wraps
-import random  # 新增：用于事件概率
+import random
 
-# 新增下面这两行
 import os
 os.environ["PATH"] = os.path.dirname(__file__) + os.pathsep + os.environ["PATH"]
 
@@ -45,7 +45,7 @@ from flask import Flask, jsonify, render_template, request
 from flask_httpauth import HTTPBasicAuth
 from dotenv import load_dotenv
 
-# ---------- 新增：TTS 依赖 ----------
+# ---------- TTS 依赖 ----------
 import asyncio
 import tempfile
 import edge_tts
@@ -114,6 +114,9 @@ event_timestamp = None
 player_choices_log = []
 MAX_CHOICE_LOG = 50
 
+# ========== 自定义角色 ==========
+custom_system_prompt = None
+
 # ========== Vosk 语音识别初始化 ==========
 VOSK_MODEL_PATH = BASE_DIR / "models" / "vosk-model-cn-0.22"
 if HAS_VOSK and VOSK_MODEL_PATH.exists():
@@ -161,7 +164,6 @@ def audio_to_text(audio_data):
         print(f"[语音] 识别失败: {e}")
     return None
 
-# ---------- 原有代码 ----------
 SYSTEM_PROMPT = """【角色设定】
 你是一个虚拟 RPG 角色扮演游戏的主持人，扮演`触手小怪物 Lv.20`：柔软、好动、有智慧，调皮、好奇、擅长捉弄而非单纯伤害。你能够使用触手制造动作和魔法效果，并通过已连接的 ESP32 和 BLE 反馈设备增强现场沉浸感。
 
@@ -267,7 +269,6 @@ serial_link = None
 op_log = []
 MAX_OP_LOG = 40
 
-# ---------- 新增：音频全局变量 ----------
 latest_audio_text = ""
 latest_audio_features = {"volume": 0, "pitch": 0, "volumeChange": 0, "timestamp": 0}
 
@@ -364,7 +365,6 @@ def ask_deepseek(img_b64, hr, ibi):
     hr_txt = "%s bpm" % hr if hr is not None else "未知"
     ibi_txt = "%s ms" % ibi if ibi is not None else "未知"
 
-    # ---------- 拼接音频信息 ----------
     with _lock:
         audio_text = latest_audio_text
         af = latest_audio_features.copy()
@@ -382,7 +382,6 @@ def ask_deepseek(img_b64, hr, ibi):
     if not audio_info:
         audio_info = "用户未说话。"
 
-    # ---------- 新增：事件信息 ----------
     event_info = ""
     if active_event:
         event_info = f"【当前随机事件】{active_event['title']}: {active_event['description']} 玩家可选项: {', '.join([o['text'] for o in active_event['options']])}。风险与收益: {active_event.get('risk_reward', '')}"
@@ -390,10 +389,13 @@ def ask_deepseek(img_b64, hr, ibi):
         recent = player_choices_log[-5:]
         event_info = "【玩家历史选择】" + "; ".join([f"{c['option']}" for c in recent])
 
+    # 使用自定义 prompt（如果设置了）
+    system_prompt = custom_system_prompt if custom_system_prompt else SYSTEM_PROMPT
+
     payload = {
         "model": DEEPSEEK_MODEL,
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": [
                 {"type": "text", "text": f"当前心率: {hr_txt}, IBI: {ibi_txt}。{audio_info}{event_info}请输出控制指令。"},
                 {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + img_b64}},
@@ -487,14 +489,12 @@ def main_loop():
 
             text = ask_deepseek(img_b64, hr, ibi)
 
-            # ---------- 新增：事件触发检测 ----------
             if text:
                 m = re.search(r"\[EVENT:(\w+)\]", text, re.I)
                 if m:
                     event_id = m.group(1)
                     evt = next((e for e in EVENT_POOL if e.get("id") == event_id), None)
                     if evt:
-                        # 心率策略
                         if hr is not None and hr > HR_STOP_ABOVE:
                             if not evt.get("relaxing", False):
                                 log_op("warn", "事件触发被熔断阻止", event_id)
@@ -503,7 +503,6 @@ def main_loop():
                                 event_timestamp = time.time()
                                 log_op("event", "触发放松事件", event_id)
                         elif hr is not None and hr >= HR_LIMIT_ABOVE:
-                            # 110~130 偏高，80%概率替换为放松事件
                             if evt.get("relaxing", False):
                                 active_event = evt
                                 event_timestamp = time.time()
@@ -523,7 +522,6 @@ def main_loop():
                             active_event = evt
                             event_timestamp = time.time()
                             log_op("event", "触发事件", event_id)
-                        # 事件触发后跳过本轮常规指令处理，等待玩家选择
                         time.sleep(INTERVAL_SECONDS)
                         continue
 
@@ -544,7 +542,7 @@ app = Flask(__name__, template_folder=str(BASE_DIR / "templates"))
 
 auth = HTTPBasicAuth()
 USERS = {"admin": "123456"}
-ACCESS_KEY = "123456"  # URL参数 key 值，可根据需要修改
+ACCESS_KEY = "123456"
 
 @auth.verify_password
 def verify_password(username, password):
@@ -559,7 +557,6 @@ def require_access(f):
             return f(*args, **kwargs)
         return auth.login_required(f)(*args, **kwargs)
     return decorated
-# ========================================================
 
 @app.route("/")
 @require_access
@@ -684,7 +681,7 @@ def api_command():
     ok = send_command(cmd, source="手动")
     return jsonify({"ok": ok, "cmd": cmd})
 
-# ---------- 新增：TTS 接口 ----------
+# ---------- TTS 接口 ----------
 @app.route("/tts", methods=["POST"])
 @require_access
 def tts():
@@ -693,10 +690,10 @@ def tts():
     if not text:
         return jsonify({"ok": False, "error": "empty text"}), 400
     if len(text) > 500:
-        text = text[:500]  # 限制长度，避免生成时间过长
+        text = text[:500]
 
     try:
-        voice = "zh-CN-XiaoxiaoNeural"  # 中文女声，可换其他
+        voice = "zh-CN-XiaoxiaoNeural"
         communicate = edge_tts.Communicate(text, voice)
 
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
@@ -714,6 +711,23 @@ def tts():
         return audio_data, 200, {"Content-Type": "audio/mpeg"}
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+# ---------- 自定义角色接口 ----------
+@app.route("/api/custom_role", methods=["GET", "POST"])
+@require_access
+def custom_role():
+    global custom_system_prompt
+    if request.method == "POST":
+        data = request.get_json(force=True, silent=True) or {}
+        prompt = str(data.get("prompt") or "").strip()
+        if prompt:
+            custom_system_prompt = prompt
+            return jsonify({"ok": True, "message": "自定义角色已保存"})
+        else:
+            custom_system_prompt = None
+            return jsonify({"ok": True, "message": "已恢复默认角色"})
+    else:
+        return jsonify({"ok": True, "custom_system_prompt": custom_system_prompt})
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="心率联动 AI 遥控服务")

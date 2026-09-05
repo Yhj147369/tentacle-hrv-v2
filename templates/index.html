@@ -131,6 +131,38 @@
     <div>最后指令 <b id="cmd">-</b></div>
   </div>
 
+  <!-- 手动控制面板 -->
+  <div class="manual-panel" style="background:#202124;border-radius:8px;padding:10px;margin-bottom:12px;">
+    <h3 style="font-size:14px;color:#9aa0a6;margin-bottom:8px;">🎛️ 手动控制</h3>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+      <label>强度 <input type="range" id="manual-level" min="0" max="100" value="30"> <span id="manual-level-val">30</span></label>
+      <label>时长(秒) <input type="range" id="manual-duration" min="1" max="60" value="10"> <span id="manual-duration-val">10</span></label>
+      <label>波形
+        <select id="manual-wave">
+          <option value="constant">constant</option>
+          <option value="sine">sine</option>
+          <option value="pulse">pulse</option>
+          <option value="random">random</option>
+        </select>
+      </label>
+      <button id="btn-manual-set">发送 SET</button>
+      <button id="btn-manual-stop">发送 STOP</button>
+    </div>
+  </div>
+
+  <!-- 自定义角色面板 -->
+  <div class="custom-role-panel" style="background:#202124;border-radius:8px;padding:10px;margin-bottom:12px;">
+    <h3 style="font-size:14px;color:#9aa0a6;margin-bottom:8px;">🎭 自定义角色</h3>
+    <button id="btn-toggle-role">编辑角色设定</button>
+    <div id="role-editor" class="hidden" style="margin-top:8px;">
+      <textarea id="custom-role-text" rows="6" style="width:100%;background:#0f1115;color:#e8eaed;border:1px solid #5f6368;border-radius:6px;padding:6px;" placeholder="在此粘贴你的 SYSTEM_PROMPT，留空并保存可恢复默认角色"></textarea>
+      <div style="margin-top:6px;display:flex;gap:8px;">
+        <button id="btn-save-role">保存角色</button>
+        <button id="btn-reset-role">恢复默认</button>
+      </div>
+    </div>
+  </div>
+
   <div class="ai-panel">
     <h3>🤖 AI 叙述 与 操作日志</h3>
     <div class="narr"><div class="narr-h">🧠 AI 思考·叙述</div><pre id="ai-narr">(等待 AI 分析…)</pre></div>
@@ -371,6 +403,42 @@
   });
   intervalInput.addEventListener('change', function () { if (timer) scheduleUpload(); });
 
+  // ====== 手动控制逻辑 ======
+  var manualLevel = document.getElementById('manual-level');
+  var manualDuration = document.getElementById('manual-duration');
+  var manualWave = document.getElementById('manual-wave');
+  var manualLevelVal = document.getElementById('manual-level-val');
+  var manualDurationVal = document.getElementById('manual-duration-val');
+  var btnManualSet = document.getElementById('btn-manual-set');
+  var btnManualStop = document.getElementById('btn-manual-stop');
+
+  manualLevel.addEventListener('input', function() { manualLevelVal.textContent = manualLevel.value; });
+  manualDuration.addEventListener('input', function() { manualDurationVal.textContent = manualDuration.value; });
+  btnManualSet.addEventListener('click', function() {
+    var cmd = 'SET ' + manualLevel.value + ' ' + manualDuration.value + ' ' + manualWave.value;
+    sendManualCommand(cmd);
+  });
+  btnManualStop.addEventListener('click', function() { sendManualCommand('STOP'); });
+
+  async function sendManualCommand(cmd) {
+    try {
+      const resp = await fetch(withKey('/api/command'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cmd: cmd })
+      });
+      const j = await resp.json();
+      if (j.ok) {
+        console.log('手动命令已发送:', cmd);
+      } else {
+        alert('命令发送失败: ' + (j.error || resp.status));
+      }
+    } catch (e) {
+      console.warn('手动命令异常:', e);
+      alert('网络错误，命令发送失败');
+    }
+  }
+
   // ====== 事件弹窗逻辑 ======
   var eventTimerInterval = null;
   var eventTimeoutSeconds = 15;
@@ -439,6 +507,52 @@
       console.warn('TTS失败:', e);
     }
   }
+
+  // ====== 自定义角色 ======
+  var btnToggleRole = document.getElementById('btn-toggle-role');
+  var roleEditor = document.getElementById('role-editor');
+  var customRoleText = document.getElementById('custom-role-text');
+  var btnSaveRole = document.getElementById('btn-save-role');
+  var btnResetRole = document.getElementById('btn-reset-role');
+
+  btnToggleRole.addEventListener('click', function() {
+    roleEditor.classList.toggle('hidden');
+  });
+
+  async function loadCustomRole() {
+    try {
+      var resp = await fetch(withKey('/api/custom_role'));
+      var j = await resp.json();
+      if (j.ok && j.custom_system_prompt) {
+        customRoleText.value = j.custom_system_prompt;
+      }
+    } catch(e) { console.warn('获取自定义角色失败:', e); }
+  }
+
+  btnSaveRole.addEventListener('click', async function() {
+    var prompt = customRoleText.value.trim();
+    try {
+      var resp = await fetch(withKey('/api/custom_role'), {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({prompt: prompt})
+      });
+      var j = await resp.json();
+      if (j.ok) {
+        alert(prompt ? '自定义角色已保存，AI 将使用新设定' : '已恢复默认角色');
+      } else {
+        alert('保存失败: ' + (j.error || resp.status));
+      }
+    } catch(e) { console.warn('保存角色失败:', e); }
+  });
+
+  btnResetRole.addEventListener('click', function() {
+    customRoleText.value = '';
+    btnSaveRole.click();
+  });
+
+  // 初始化时尝试加载已有角色
+  loadCustomRole();
 
   setInterval(async function () {
     try {
