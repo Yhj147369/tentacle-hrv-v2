@@ -15,11 +15,11 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 # -*- coding: utf-8 -*-
-# -*- coding: utf-8 -*-
 """
 心率联动 AI 遥控服务
 集成: 图片上传、心率读取、音频录制、语音识别、AI决策
 安全: 心率熔断、图片超时停用AI
+新增: 随机事件系统（DLC3）
 """
 import argparse
 import base64
@@ -31,6 +31,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from functools import wraps
+import random  # 新增：用于事件概率
 
 # 新增下面这两行
 import os
@@ -86,6 +87,27 @@ HEARTBEAT_INTERVAL = 2.0
 IMAGE_MAX_WIDTH = 640
 IMAGE_STALE_TIMEOUT = 10
 WAVE_SET = ("constant", "sine", "pulse", "random")
+
+# ========== 事件系统初始化 ==========
+EVENTS_FILE = BASE_DIR / "events.json"
+EVENT_TIMEOUT = 15
+EVENT_POOL = []
+try:
+    if EVENTS_FILE.exists():
+        with open(EVENTS_FILE, "r", encoding="utf-8") as f:
+            EVENT_CONFIG = json.load(f)
+        EVENT_TIMEOUT = int(EVENT_CONFIG.get("timeout_seconds", 15))
+        EVENT_POOL = EVENT_CONFIG.get("events", [])
+        print(f"[事件] 已加载 {len(EVENT_POOL)} 个事件")
+    else:
+        print("[事件] 未找到 events.json，事件系统禁用")
+except Exception as e:
+    print(f"[事件] 加载失败: {e}")
+
+active_event = None
+event_timestamp = None
+player_choices_log = []
+MAX_CHOICE_LOG = 50
 
 # ========== Vosk 语音识别初始化 ==========
 VOSK_MODEL_PATH = BASE_DIR / "models" / "vosk-model-cn-0.22"
@@ -179,6 +201,13 @@ SYSTEM_PROMPT = """【角色设定】
 - 明显接触或干扰：强度 20~50，时长 5~8 秒，波形 sine 或 pulse。
 - 强力事件或突然袭击：强度 50~80，时长 5~10 秒，波形 pulse 或 random（禁止超过 80）。
 - 不规则节奏、短爆发、停顿后变化：使用多组 SET 交替，并配合 STOP 制造停顿（3~5 秒归零）。
+
+【随机事件系统】
+你可以在剧情中根据节奏主动触发随机事件。触发方式为：在输出指令（SET/STOP）之前或之后单独一行输出 [EVENT:事件id]。事件id必须来自系统事件池，当前事件池由 events.json 加载。
+触发时机由你判断，不要过于频繁或稀少。通常每 5~10 轮 AI 回复出现一次比较合适。
+当事件被触发后，系统会暂停你的常规判断，等待玩家选择。玩家选择后，你会收到“玩家选择了：xxx”，然后继续剧情。如果玩家超时未选，系统会随机选一项并告诉你。
+如果玩家当前魔力波动为“紊乱”（心率>130），你只能触发 relaxing 类事件，不能触发普通事件。如果魔力波动为“波动”（110~130），你有80%概率应选择 relaxing 类事件，20%概率选择普通事件。
+事件选项的 impact 字段会告诉你每个选择的大致影响，请据此在后续剧情中体现玩家的行动和结果。
 
 【安全约束（你必须无条件遵守）】
 - 如果玩家当前魔力波动为"紊乱"（> 130），你只能输出 STOP，禁止输出任何 SET。
@@ -348,12 +377,20 @@ def ask_deepseek(img_b64, hr, ibi):
     if not audio_info:
         audio_info = "用户未说话。"
 
+    # ---------- 新增：事件信息 ----------
+    event_info = ""
+    if active_event:
+        event_info = f"【当前随机事件】{active_event['title']}: {active_event['description']} 玩家可选项: {', '.join([o['text'] for o in active_event['options']])}。风险与收益: {active_event.get('risk_reward', '')}"
+    elif player_choices_log:
+        recent = player_choices_log[-5:]
+        event_info = "【玩家历史选择】" + "; ".join([f"{c['option']}" for c in recent])
+
     payload = {
         "model": DEEPSEEK_MODEL,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": [
-                {"type": "text", "text": f"当前心率: {hr_txt}, IBI: {ibi_txt}。{audio_info}请输出控制指令。"},
+                {"type": "text", "text": f"当前心率: {hr_txt}, IBI: {ibi_txt}。{audio_info}{event_info}请输出控制指令。"},
                 {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + img_b64}},
             ]},
         ],
@@ -414,6 +451,7 @@ def send_command(cmd, source):
     return serial_link.send(cmd)
 
 def main_loop():
+    global active_event, event_timestamp
     last_beat = 0.0
     frame = 0
     while True:
@@ -443,6 +481,47 @@ def main_loop():
                 time.sleep(INTERVAL_SECONDS); continue
 
             text = ask_deepseek(img_b64, hr, ibi)
+
+            # ---------- 新增：事件触发检测 ----------
+            if text:
+                m = re.search(r"\[EVENT:(\w+)\]", text, re.I)
+                if m:
+                    event_id = m.group(1)
+                    evt = next((e for e in EVENT_POOL if e.get("id") == event_id), None)
+                    if evt:
+                        # 心率策略
+                        if hr is not None and hr > HR_STOP_ABOVE:
+                            if not evt.get("relaxing", False):
+                                log_op("warn", "事件触发被熔断阻止", event_id)
+                            else:
+                                active_event = evt
+                                event_timestamp = time.time()
+                                log_op("event", "触发放松事件", event_id)
+                        elif hr is not None and hr >= HR_LIMIT_ABOVE:
+                            # 110~130 偏高，80%概率替换为放松事件
+                            if evt.get("relaxing", False):
+                                active_event = evt
+                                event_timestamp = time.time()
+                                log_op("event", "触发放松事件", event_id)
+                            else:
+                                relaxing_events = [e for e in EVENT_POOL if e.get("relaxing", False)]
+                                if relaxing_events and random.random() < 0.8:
+                                    evt = random.choice(relaxing_events)
+                                    active_event = evt
+                                    event_timestamp = time.time()
+                                    log_op("event", "心率偏高，替换为放松事件", evt.get("id", ""))
+                                else:
+                                    active_event = evt
+                                    event_timestamp = time.time()
+                                    log_op("event", "触发普通事件", event_id)
+                        else:
+                            active_event = evt
+                            event_timestamp = time.time()
+                            log_op("event", "触发事件", event_id)
+                        # 事件触发后跳过本轮常规指令处理，等待玩家选择
+                        time.sleep(INTERVAL_SECONDS)
+                        continue
+
             cmd = parse_command(text)
             if cmd:
                 cmd = clamp_command(cmd, hr)
@@ -455,7 +534,7 @@ def main_loop():
             log("[主循环] 异常: %s" % e)
         time.sleep(INTERVAL_SECONDS)
 
-# ==================== 认证部分（修改） ====================
+# ==================== 认证部分 ====================
 app = Flask(__name__, template_folder=str(BASE_DIR / "templates"))
 
 auth = HTTPBasicAuth()
@@ -471,10 +550,8 @@ def verify_password(username, password):
 def require_access(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        # 先检查 URL 参数 key 是否正确
         if request.args.get("key") == ACCESS_KEY:
             return f(*args, **kwargs)
-        # 否则走 Basic Auth
         return auth.login_required(f)(*args, **kwargs)
     return decorated
 # ========================================================
@@ -559,8 +636,40 @@ def latest_jpg():
 def api_status():
     with _lock: s = dict(_state)
     with _lock: s["op_log"] = list(op_log[-MAX_OP_LOG:])
-    s["serial_ok"] = bool(serial_link.ok); s["model"] = DEEPSEEK_MODEL; s["now"] = time.time()
+    s["serial_ok"] = bool(serial_link.ok)
+    s["model"] = DEEPSEEK_MODEL
+    s["now"] = time.time()
+    s["active_event"] = active_event
+    s["event_timestamp"] = event_timestamp
     return jsonify(s)
+
+@app.route("/api/event_choice", methods=["POST"])
+@require_access
+def event_choice():
+    global active_event, event_timestamp
+    data = request.get_json(force=True, silent=True) or {}
+    option_text = str(data.get("option") or "").strip()
+    if not option_text:
+        return jsonify({"ok": False, "error": "empty option"}), 400
+
+    # 记录玩家历史选择
+    with _lock:
+        player_choices_log.append({
+            "event_id": active_event.get("id") if active_event else "unknown",
+            "option": option_text,
+            "ts": time.time()
+        })
+        if len(player_choices_log) > MAX_CHOICE_LOG:
+            del player_choices_log[:len(player_choices_log) - MAX_CHOICE_LOG]
+
+    # 将玩家选择作为下一次 AI 输入
+    with _lock:
+        latest_audio_text = f"玩家选择了：{option_text}"
+        latest_audio_features = {"volume": 0, "pitch": 0, "volumeChange": 0, "timestamp": 0}
+
+    active_event = None
+    event_timestamp = None
+    return jsonify({"ok": True})
 
 @app.route("/api/command", methods=["POST"])
 @require_access
