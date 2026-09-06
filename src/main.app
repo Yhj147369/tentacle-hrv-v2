@@ -27,8 +27,8 @@
  *  - setup() 中 Serial.setTimeout(50) 缩短 readStringUntil 阻塞时间，
  *    避免串口空闲时卡住主循环、影响定时停止精度。
  *  - 新增设备类型(Device Profile)适配框架(toy_profiles.h/.cpp)：玩具通道参数化，
- *    支持跳蛋(默认，现协议逐字节不变)与飞机杯类(预留，待逆向)。切换方式见下方
- *    ACTIVE_TOY_PROFILE 宏；设计见仓库 docs/飞机杯适配说明.md。
+ *    支持体感设备 A(默认，现协议逐字节不变)与体感设备 B类(预留，待逆向)。切换方式见下方
+ *    ACTIVE_TOY_PROFILE 宏；设计见仓库 docs/体感设备适配说明.md。
  */
 
 #include <BLEDevice.h>
@@ -38,9 +38,9 @@
 #include <BLE2902.h>
 #include "toy_profiles.h"
 
-// ===== 设备类型切换（编译期，默认跳蛋）=====
-// 跳蛋:   TOY_PROFILE_JUMP_EGG （默认，现协议 0xFFE0/0xFFE1 + 0xA1 0x02 ... 报文）
-// 飞机杯: TOY_PROFILE_MALE_MST（预留：占位 UUID，编码未实现，逆向后填入 toy_profiles.cpp）
+// ===== 设备类型切换（编译期，默认体感设备 A）=====
+// 体感设备 A:   TOY_PROFILE_JUMP_EGG （默认，现协议 0xFFE0/0xFFE1 + 0xA1 0x02 ... 报文）
+// 体感设备 B: TOY_PROFILE_MALE_MST（预留：占位 UUID，编码未实现，逆向后填入 toy_profiles.cpp）
 // 也可命令行覆盖：--build-property build.extra_flags=-DACTIVE_TOY_PROFILE=TOY_PROFILE_MALE_MST
 #ifndef ACTIVE_TOY_PROFILE
 #define ACTIVE_TOY_PROFILE TOY_PROFILE_JUMP_EGG

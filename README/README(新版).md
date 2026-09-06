@@ -91,7 +91,7 @@ ssh -o StrictHostKeyChecking=no -R 0:127.0.0.1:8080 ClothoUseServerInforaqo17875
 ## 🔌 ESP32 固件
 
 固件位于 `esp32_firmware/esp32_firmware.ino`，使用 Arduino IDE 烧录。  
-采用"设备类型 Profile"框架（详见 `docs/飞机杯适配说明.md`）：默认跳蛋（UUID `0000FFE0`/`0000FFE1`、上限 60，行为与旧版一致），预留飞机杯类 profile 待逆向。更换/新增玩具时，把逆向所得 UUID 与协议填进 `esp32_firmware/toy_profiles.h/.cpp`，并在 .ino 顶部切换 `ACTIVE_TOY_PROFILE`。心率手环连接参数见代码 HR_* 宏。
+采用"设备类型 Profile"框架（详见 `docs/体感设备适配说明.md`）：默认体感设备 A（UUID `0000FFE0`/`0000FFE1`、上限 60，行为与旧版一致），预留体感设备 B类 profile 待逆向。更换/新增玩具时，把逆向所得 UUID 与协议填进 `esp32_firmware/toy_profiles.h/.cpp`，并在 .ino 顶部切换 `ACTIVE_TOY_PROFILE`。心率手环连接参数见代码 HR_* 宏。
 
 ## ⚠️ 安全注意事项
 
