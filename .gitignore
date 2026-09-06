@@ -27,3 +27,7 @@ certs/
 # 本地大体积工具（37MB）与编译产物（由 CI 在 Release 时生成）
 arduino-cli.exe
 esp32_firmware/build/
+# ��������̬�ļ�
+.flask_pid.txt
+server_stdout.log
+server_stderr.log
