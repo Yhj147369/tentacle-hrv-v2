@@ -1,0 +1,72 @@
+# 自动化 CLA 门禁：PR 作者未签署（不在 .cla/signatures.json）→ 发引导评论并使检查失败，
+# 从而被 main 分支保护（required status check: cla-check）拦截合并。
+#
+# 安全说明：使用 pull_request_target 且只读 .cla/signatures.json（base 分支 = 已受信代码），
+# 从不执行 PR 中的代码；checkout 显式指定 base 分支名，使维护者"改名单后 rerun"能立即读到最新名单。
+name: CLA
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  cla-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout base branch (含最新签名名单)
+        uses: actions/checkout@v4
+        with:
+          # 显式按分支名检出，rerun 时解析为当时最新 main 内容
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: CLA check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          echo "==> PR #$PR_NUMBER 作者：$PR_AUTHOR"
+
+          if [ ! -f .cla/signatures.json ]; then
+            echo "::error::仓库缺少 .cla/signatures.json，无法判定 CLA"
+            exit 1
+          fi
+
+          # 1) 作者是否在签名名单中？
+          SIGNED=$(jq -r --arg l "$PR_AUTHOR" '.signatures[]? | select(.login == $l) | .login' \
+            .cla/signatures.json | head -n 1)
+          if [ -n "$SIGNED" ]; then
+            echo "==> ✅ 作者 $PR_AUTHOR 已在签名名单中，CLA 检查通过"
+            exit 0
+          fi
+
+          echo "==> ❌ 作者 $PR_AUTHOR 未签署 CLA，本检查将失败"
+
+          # 2) 幂等引导评论：该 PR 已存在则不再重复发
+          MARKER="请回复「我同意 CLA」"
+          if gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
+            --jq '.[].body' | grep -qF "$MARKER"; then
+            echo "==> 该 PR 已有引导评论，跳过发帖"
+          else
+            COMMENT_FILE="$(mktemp)"
+            {
+              echo "感谢你的贡献！🤝"
+              echo ""
+              echo "检测到你的 GitHub 账号 **尚未签署 CLA（贡献者许可协议）**。本仓库已启用自动化门禁：**未签署的 PR 无法合并**。"
+              echo ""
+              echo "请回复「**我同意 CLA**」以声明你已阅读并同意 [CLA.md](https://github.com/$GITHUB_REPOSITORY/blob/main/CLA.md)；"
+              echo "随后请联系维护者将你的登录名加入签名名单 [.cla/signatures.json](https://github.com/$GITHUB_REPOSITORY/blob/main/.cla/signatures.json) 并对本检查执行 rerun，检查变绿后即可合并。"
+              echo ""
+              echo "签署流程详见 [CONTRIBUTING.md](https://github.com/$GITHUB_REPOSITORY/blob/main/CONTRIBUTING.md) 与 [CLA.md](https://github.com/$GITHUB_REPOSITORY/blob/main/CLA.md)。"
+            } > "$COMMENT_FILE"
+            gh pr comment "$PR_NUMBER" --body-file "$COMMENT_FILE"
+            rm -f "$COMMENT_FILE"
+            echo "==> 已发布引导评论"
+          fi
+
+          exit 1
