@@ -173,7 +173,7 @@ arduino-cli compile --fqbn esp32:esp32:esp32 esp32_firmware
 arduino-cli upload -p COM3 --fqbn esp32:esp32:esp32 esp32_firmware
 ```
 
-需自行填写玩具的 BLE 服务 UUID 与特征 UUID（在 `sendToToy()` 函数中，波形字符串已映射为整数 0=constant/1=sine/2=pulse/3=random），并确认心率手环的连接参数。
+固件采用"设备类型 Profile"框架（见 `docs/飞机杯适配说明.md`）：默认跳蛋 profile（UUID `0000FFE0`/`0000FFE1`、强度上限 60，行为与旧版一致），并预留飞机杯类 profile（`TOY_PROFILE_MALE_MST`）待逆向。需更换玩具时，把逆向所得 UUID/协议填入 `esp32_firmware/toy_profiles.h/.cpp`，并在 `esp32_firmware.ino` 顶部切换 `ACTIVE_TOY_PROFILE`。心率手环连接参数见代码 HR_* 宏。
 
 ## ⚠️ 安全注意事项
 

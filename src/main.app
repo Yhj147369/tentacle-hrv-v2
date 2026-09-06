@@ -26,6 +26,9 @@
  *  - 新增 BEAT 心跳静默处理（服务器每 2 秒发送一次）。
  *  - setup() 中 Serial.setTimeout(50) 缩短 readStringUntil 阻塞时间，
  *    避免串口空闲时卡住主循环、影响定时停止精度。
+ *  - 新增设备类型(Device Profile)适配框架(toy_profiles.h/.cpp)：玩具通道参数化，
+ *    支持跳蛋(默认，现协议逐字节不变)与飞机杯类(预留，待逆向)。切换方式见下方
+ *    ACTIVE_TOY_PROFILE 宏；设计见仓库 docs/飞机杯适配说明.md。
  */
 
 #include <BLEDevice.h>
@@ -33,16 +36,20 @@
 #include <BLEScan.h>
 #include <BLEAdvertisedDevice.h>
 #include <BLE2902.h>
+#include "toy_profiles.h"
+
+// ===== 设备类型切换（编译期，默认跳蛋）=====
+// 跳蛋:   TOY_PROFILE_JUMP_EGG （默认，现协议 0xFFE0/0xFFE1 + 0xA1 0x02 ... 报文）
+// 飞机杯: TOY_PROFILE_MALE_MST（预留：占位 UUID，编码未实现，逆向后填入 toy_profiles.cpp）
+// 也可命令行覆盖：--build-property build.extra_flags=-DACTIVE_TOY_PROFILE=TOY_PROFILE_MALE_MST
+#ifndef ACTIVE_TOY_PROFILE
+#define ACTIVE_TOY_PROFILE TOY_PROFILE_JUMP_EGG
+#endif
+ToyProfileId g_active_profile_id = ACTIVE_TOY_PROFILE; // 活动 profile（当前=编译期选择）
 
 #define HR_SERVICE_UUID "0000180D-0000-1000-8000-00805F9B34FB"
 #define HR_CHAR_UUID    "00002A37-0000-1000-8000-00805F9B34FB"
 
-// 玩具 UUID（需替换成你逆向得到的值）
-#define TOY_SERVICE_UUID   "0000FFE0-0000-1000-8000-00805F9B34FB"
-#define TOY_CHAR_UUID      "0000FFE1-0000-1000-8000-00805F9B34FB"
-
-// 蓝牙玩具物理强度上限（固件硬限制，最终按 min(服务器值, 此值) 执行）
-#define MAX_INTENSITY 60
 // 单次 SET 允许的最大时长（秒），与 server.py 的 MAX_DURATION_S=300 保持一致
 #define MAX_DURATION_S 300
 
@@ -67,18 +74,25 @@ BLEClient* toyClient = nullptr;
 unsigned long stopAtMillis = 0;   // 计划自动停止的时刻（毫秒）
 bool autoStopActive = false;      // 是否有未完成的定时停止任务
 
-// 返回 true 表示已真正写入玩具特征；false 表示玩具未连接（仅记录）
+// 返回 true 表示已真正写入玩具特征；false 表示玩具未连接或当前 profile 无字节可发
 bool sendToToy(int intensity, int waveform) {
-  (void)waveform;  // TODO: 逆向出玩具协议后，把波形模式(0-3)编码进数据包的对应字节
   if (!toyConnected || toyChar == nullptr) {
     Serial.println("⚠️ 玩具未连接，指令已记录");
     return false;
   }
-  // 根据你逆向的协议修改此处
-  uint8_t packet[] = {0xA1, 0x02, (uint8_t)intensity, 0x00, 0xB3};
-  packet[3] = packet[0] ^ packet[1] ^ packet[2];
-  toyChar->writeValue(packet, sizeof(packet));
-  Serial.printf("📤 发送: %02X %02X %02X %02X %02X\n", packet[0], packet[1], packet[2], packet[3], packet[4]);
+  const ToyProfile *prof = toyActiveProfile();
+  uint8_t buf[32];
+  size_t len = (prof && prof->encode) ? prof->encode(intensity, waveform, buf, sizeof(buf)) : 0;
+  if (len == 0 || len > sizeof(buf)) {
+    // 预留 profile（如 MALE_MST）尚未实现编码时不发送任何字节
+    Serial.printf("⚠️ 当前设备类型(%s)未生成指令字节（预留未实现/无动作），指令已忽略\n",
+                  prof ? prof->name : "?");
+    return false;
+  }
+  toyChar->writeValue(buf, len);
+  Serial.print("📤 发送:");
+  for (size_t i = 0; i < len; i++) Serial.printf(" %02X", buf[i]);
+  Serial.println();
   return true;
 }
 
@@ -164,7 +178,7 @@ void handleSerialCommand(String cmd) {
       Serial.printf("⚠️ 未知波形: %s（应为 constant/sine/pulse/random 或 0-3）\n", args[3].c_str());
       return;
     }
-    intensity = constrain(intensity, 0, MAX_INTENSITY);
+    intensity = constrain(intensity, 0, (int)toyActiveProfile()->max_intensity);
     duration  = constrain(duration, 0, MAX_DURATION_S);
     if (sendToToy(intensity, waveform)) {
       scheduleStop(duration);
@@ -190,7 +204,9 @@ class HrCallbacks : public BLEAdvertisedDeviceCallbacks {
 
 class ToyCallbacks : public BLEAdvertisedDeviceCallbacks {
   void onResult(BLEAdvertisedDevice device) {
-    if (device.haveServiceUUID() && device.isAdvertisingService(BLEUUID(TOY_SERVICE_UUID))) {
+    const ToyProfile *prof = toyActiveProfile();
+    if (prof && device.haveServiceUUID() &&
+        device.isAdvertisingService(BLEUUID(prof->service_uuid))) {
       BLEDevice::getScan()->stop();
       toyDevice = new BLEAdvertisedDevice(device);
       doConnectToy = true;
@@ -225,14 +241,16 @@ void connectHR() {
 }
 
 void connectToy() {
+  const ToyProfile *prof = toyActiveProfile();
+  if (!prof) return;
   if (toyClient == nullptr) toyClient = BLEDevice::createClient();
   if (!toyClient->connect(toyDevice)) {
     Serial.println("⚠️ 玩具连接失败，稍后重试");
     return;
   }
-  auto svc = toyClient->getService(BLEUUID(TOY_SERVICE_UUID));
+  auto svc = toyClient->getService(BLEUUID(prof->service_uuid));
   if (svc) {
-    toyChar = svc->getCharacteristic(BLEUUID(TOY_CHAR_UUID));
+    toyChar = svc->getCharacteristic(BLEUUID(prof->tx_uuid));
     if (toyChar) {
       toyConnected = true;
       Serial.println("✅ 玩具已连接");
