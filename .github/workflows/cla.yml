@@ -3,6 +3,11 @@
 #    从而被 main 分支保护（required status check: cla-check）拦截合并；作者已签署 → 直接通过。
 # 2) auto-sign（on issue_comment）：PR 作者本人回复「我同意 CLA」（或 I agree 等）→ 机器人自动把作者写入
 #    .cla/signatures.json 并推送 main，再把该 PR 的 cla-check 置为 success —— 全程无需维护者手动操作/rerun。
+#    - 免维护模式（推荐）：仓库 secret 配置 CLA_BOT_PAT（fine-grained PAT，Actions/Contents/Commit statuses
+#      均 Read and write）后，auto-sign 用 PAT 直推 main（绕过分支保护），并自动 rerun 该 PR 先前失败的
+#      CLA workflow run —— 重跑时名单已含作者 → 真实 cla-check 转绿 → merge 即 CLEAN（100% 免维护）。
+#    - 降级模式（无 CLA_BOT_PAT）：保持纯 GITHUB_TOKEN 行为（临时分支 + 预置绿色 check run 推 main，
+#      REST 建同名绿色 check run），PR 的 merge 可能仍需一次真实 cla-check 转绿。
 #
 # 安全说明：
 # - 两个 job 均运行仓库（默认分支/PR base 分支）中的代码，从不执行 PR 工作区代码；
@@ -98,4 +103,6 @@ jobs:
       - name: Validate & auto-sign
         env:
           GH_TOKEN: ${{ github.token }}
+          # 免维护模式专用：fine-grained PAT（Actions/Contents/Commit statuses R/W）。未配置则为空 → 脚本自动降级
+          CLA_BOT_PAT: ${{ secrets.CLA_BOT_PAT }}
         run: python3 .github/scripts/cla_autosign.py
