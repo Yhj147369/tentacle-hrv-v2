@@ -6,16 +6,20 @@
 
 > 本项目为 **GPL-3.0** 个人开源项目。任何贡献在合并前需同意 [CLA.md](./CLA.md)（提交 Pull Request 即视为同意）；请勿提交密钥、证书、模型、日志等敏感或运行时文件。
 
-## 签署 CLA 流程（自动化门禁）
+## 签署 CLA 流程（回复即自动签署）
 
-> 仓库已启用自动化 CLA 检查（`cla-check`）：PR 作者不在 [.cla/signatures.json](./.cla/signatures.json) 签名名单中时，检查失败并附带引导评论，PR 将**无法合并**。
+> 仓库已启用自动化 CLA 门禁（`cla-check`）：PR 作者不在 [.cla/signatures.json](./.cla/signatures.json) 签名名单中时，检查失败并附带引导评论，PR 将**无法合并**。
 
-1. **贡献者**：在 PR 内回复「我同意 CLA」（即同意 [CLA.md](./CLA.md)）；
-2. **维护者**：将贡献者的 GitHub 登录名加入 `.cla/signatures.json` 的 `signatures` 数组（含 `login`、`name`、`agreed_at`），提交并推送 `main`；
-3. **维护者**：对该 PR 对应的 `cla-check` workflow run 执行 rerun（`gh run rerun <run-id>` 或 Actions 页面 Re-run）；
-4. 重跑后 `cla-check` 变绿，PR 即可正常合并。
+**贡献者只需在 PR 内回复一句，签署即全自动完成：**
 
-已签署者提交 PR 时 `cla-check` 自动通过，无需人工操作。
+1. **贡献者**：在你的 PR 评论区回复「**我同意 CLA**」（也接受「我同意CLA」「I agree」「I agree to the CLA」），即代表你已阅读并同意 [CLA.md](./CLA.md)；
+2. **机器人自动完成**（全程无需维护者手动操作、无需 rerun）：
+   - 校验评论者确实是该 PR 作者；
+   - 把你的登录名追加到 `.cla/signatures.json`（`login` / `name` / `agreed_at`）并推送到 `main`；
+   - 把该 PR 的 `cla-check` 置为通过，并回复确认评论；
+3. 检查变绿后 PR 即可正常合并。
+
+> 已签署者提交 PR 时 `cla-check` 自动通过；维护者可随时人工复核签名名单（移除冒名或异常记录即可）。
 
 ## 我该如何贡献
 
