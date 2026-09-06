@@ -162,8 +162,18 @@ ssh -o StrictHostKeyChecking=no -R 0:127.0.0.1:8080 ClothoUseServerInforaqo17875
 
 ## 🔌 ESP32 固件
 
-固件位于 `esp32_firmware/esp32_firmware.ino`，使用 Arduino IDE 烧录。  
-需自行填写玩具的 BLE 服务 UUID 和特征 UUID（在 `sendToToy()` 函数中），并确认心率手环的连接参数。
+固件位于 `esp32_firmware/esp32_firmware.ino`，使用 Arduino IDE 烧录。
+
+> ⚠️ **重要**：固件 BLE 部分基于 arduino-esp32 core **3.x API**，请勿使用 1.x/2.x 核心编译（会报错）；本项目以 **esp32 core 3.3.11** 编译验证通过（Flash 83% / RAM 12%）。
+
+命令行烧录示例（可选，需安装 [arduino-cli](https://arduino.github.io/arduino-cli/)）：
+
+```bash
+arduino-cli compile --fqbn esp32:esp32:esp32 esp32_firmware
+arduino-cli upload -p COM3 --fqbn esp32:esp32:esp32 esp32_firmware
+```
+
+需自行填写玩具的 BLE 服务 UUID 与特征 UUID（在 `sendToToy()` 函数中，波形字符串已映射为整数 0=constant/1=sine/2=pulse/3=random），并确认心率手环的连接参数。
 
 ## ⚠️ 安全注意事项
 
