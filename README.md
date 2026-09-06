@@ -200,6 +200,10 @@ arduino-cli upload -p COM3 --fqbn esp32:esp32:esp32 esp32_firmware
 
 运行时生效，重启后恢复默认（DLC9 当前未持久化）。
 
+## 🤝 贡献
+
+欢迎参与！贡献前请阅读 [CONTRIBUTING.md](./CONTRIBUTING.md)（贡献指南）与 [CLA.md](./CLA.md)（贡献者许可协议）——提交 Pull Request 即视为同意 CLA，未签署的 PR 无法合并（自动化检查）。
+
 ## 📄 许可证
 
 GPL-3.0，详见 LICENSE。

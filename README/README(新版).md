@@ -114,3 +114,7 @@ ssh -o StrictHostKeyChecking=no -R 0:127.0.0.1:8080 ClothoUseServerInforaqo17875
 
 确认 ESP32 已插入并查看设备管理器中的 COM 口，修改 `.env` 中的 `SERIAL_PORT`。
 
+## 🤝 贡献
+
+欢迎参与！贡献前请阅读 [CONTRIBUTING.md](./CONTRIBUTING.md)（贡献指南）与 [CLA.md](./CLA.md)（贡献者许可协议）——提交 Pull Request 即视为同意 CLA，未签署的 PR 无法合并（自动化检查）。
+
