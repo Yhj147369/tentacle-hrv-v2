@@ -31,3 +31,6 @@ esp32_firmware/build/
 .flask_pid.txt
 server_stdout.log
 server_stderr.log
+
+# 视觉工具截图工件
+.dsh-vision-router/
