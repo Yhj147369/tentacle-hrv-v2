@@ -212,3 +212,5 @@ GPL-3.0，详见 LICENSE。
 
 - 原作者：ra1nyxin/tentacle-monster-roleplay-esp32
 - DeepSeek API / Vosk / edge-tts / Chart.js
+
+<!-- cla-e2e2 demo -->
