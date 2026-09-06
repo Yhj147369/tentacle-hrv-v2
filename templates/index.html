@@ -607,6 +607,7 @@
   var cmdChart = null;
 
   function initCharts() {
+    if (typeof Chart === 'undefined') return; // CDN 未加载时降级：图表不可用但不阻断其它逻辑
     var hrCtx = document.getElementById('hrChart').getContext('2d');
     var cmdCtx = document.getElementById('cmdChart').getContext('2d');
     hrChart = new Chart(hrCtx, {
@@ -654,7 +655,7 @@
   }
 
   function updateCharts(dataLog) {
-    if (!hrChart || !cmdChart) return;
+    if (typeof Chart === 'undefined' || !hrChart || !cmdChart) return;
     var labels = [];
     var hrData = [];
     var cmdData = [];
@@ -814,8 +815,8 @@
     } catch(e) { console.warn(e); }
   });
 
-  // 初始化图表和角色加载
-  initCharts();
+  // 初始化图表和角色加载（Chart.js 来自 CDN，失败时降级运行，不影响轮询/事件/手动控制）
+  try { initCharts(); } catch (e) { console.warn('图表初始化失败(CDN不可达?)，降级运行', e); }
   loadCustomRole();
 
   setInterval(async function () {

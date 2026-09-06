@@ -88,8 +88,8 @@ SERIAL_BAUD = int(os.environ.get("SERIAL_BAUD", "115200"))
 INTERVAL_SECONDS = float(os.environ.get("INTERVAL_SECONDS", "3"))
 
 # ===== 常量（之前可能遗漏，现在补充） =====
-IMAGE_MAX_WIDTH = 640
-IMAGE_STALE_TIMEOUT = 10
+IMAGE_MAX_WIDTH = int(os.environ.get("IMAGE_MAX_WIDTH", "640"))
+IMAGE_STALE_TIMEOUT = int(os.environ.get("IMAGE_STALE_TIMEOUT", "10"))
 HEARTBEAT_INTERVAL = 2.0
 WAVE_SET = ("constant", "sine", "pulse", "random")
 
@@ -530,7 +530,7 @@ def send_command(cmd, source):
     return serial_link.send(cmd)
 
 def main_loop():
-    global active_event, event_timestamp
+    global active_event, event_timestamp, latest_audio_text, latest_audio_features
     last_beat = 0.0
     frame = 0
     while True:
@@ -540,6 +540,38 @@ def main_loop():
             now = time.time()
             if now - last_beat >= HEARTBEAT_INTERVAL:
                 serial_link.send("BEAT"); last_beat = now
+
+            # ===== 事件超时服务端处理：玩家在 EVENT_TIMEOUT 内未选择则自动随机选择 =====
+            # 放在每轮最前面（心跳后、读图/熔断前），任何分支 continue 都不会漏检
+            if active_event is not None and event_timestamp is not None and (now - event_timestamp) > EVENT_TIMEOUT:
+                evt_id = active_event.get("id", "unknown")
+                options = active_event.get("options", [])
+                if options:
+                    option = random.choice(options)["text"]
+                    with _lock:
+                        player_choices_log.append({
+                            "event_id": evt_id,
+                            "option": option,
+                            "ts": now
+                        })
+                        if len(player_choices_log) > MAX_CHOICE_LOG:
+                            del player_choices_log[:len(player_choices_log) - MAX_CHOICE_LOG]
+
+                        conversation_history.append({
+                            "user": f"玩家在事件 {evt_id} 中选择了：{option}",
+                            "ai": "(等待玩家行动)"
+                        })
+                        if len(conversation_history) > MAX_HISTORY:
+                            del conversation_history[:len(conversation_history) - MAX_HISTORY]
+
+                        latest_audio_text = f"玩家超时未选择，系统自动选择：{option}"
+                        latest_audio_features = {"volume": 0, "pitch": 0, "volumeChange": 0, "timestamp": 0}
+                    log_op("event", "事件超时自动选择", "%s -> %s" % (evt_id, option))
+                else:
+                    log_op("warn", "事件超时但无选项", evt_id)
+                active_event = None
+                event_timestamp = None
+
             img_b64, mtime = load_latest_image()
             hr, ibi = get_hr()
             if img_b64 is not None:
@@ -742,7 +774,7 @@ def api_status():
 @app.route("/api/event_choice", methods=["POST"])
 @require_access
 def event_choice():
-    global active_event, event_timestamp
+    global active_event, event_timestamp, latest_audio_text, latest_audio_features
     data = request.get_json(force=True, silent=True) or {}
     option_text = str(data.get("option") or "").strip()
     if not option_text:
