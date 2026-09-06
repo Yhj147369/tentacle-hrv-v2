@@ -1,13 +1,20 @@
-# 自动化 CLA 门禁：PR 作者未签署（不在 .cla/signatures.json）→ 发引导评论并使检查失败，
-# 从而被 main 分支保护（required status check: cla-check）拦截合并。
+# 自动化 CLA 门禁（双通道）：
+# 1) cla-check（on pull_request_target）：PR 作者未签署（不在 .cla/signatures.json）→ 发引导评论并使检查失败，
+#    从而被 main 分支保护（required status check: cla-check）拦截合并；作者已签署 → 直接通过。
+# 2) auto-sign（on issue_comment）：PR 作者本人回复「我同意 CLA」（或 I agree 等）→ 机器人自动把作者写入
+#    .cla/signatures.json 并推送 main，再把该 PR 的 cla-check 置为 success —— 全程无需维护者手动操作/rerun。
 #
-# 安全说明：使用 pull_request_target 且只读 .cla/signatures.json（base 分支 = 已受信代码），
-# 从不执行 PR 中的代码；checkout 显式指定 base 分支名，使维护者"改名单后 rerun"能立即读到最新名单。
+# 安全说明：
+# - 两个 job 均运行仓库（默认分支/PR base 分支）中的代码，从不执行 PR 工作区代码；
+# - auto-sign 只在「评论者 == PR 作者」且正文（去空白、大小写不敏感）精确匹配签署语时才写入名单，
+#   外部用户无法替他人签署；已签署者重复回复会被幂等跳过。
 name: CLA
 
 on:
   pull_request_target:
     types: [opened, reopened, synchronize]
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
@@ -15,12 +22,14 @@ permissions:
 
 jobs:
   cla-check:
+    # issue_comment 事件下没有 pull_request 上下文，cla-check 仅在 PR 事件上运行
+    if: github.event_name == 'pull_request_target'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout base branch (含最新签名名单)
         uses: actions/checkout@v4
         with:
-          # 显式按分支名检出，rerun 时解析为当时最新 main 内容
+          # 显式按分支名检出，rerun 时解析为当时最新 base 内容
           ref: ${{ github.event.pull_request.base.ref }}
 
       - name: CLA check
@@ -47,7 +56,7 @@ jobs:
 
           echo "==> ❌ 作者 $PR_AUTHOR 未签署 CLA，本检查将失败"
 
-          # 2) 幂等引导评论：该 PR 已存在则不再重复发
+          # 2) 幂等引导评论（自动版文案）：该 PR 已存在则不再重复发
           MARKER="请回复「我同意 CLA」"
           if gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
             --jq '.[].body' | grep -qF "$MARKER"; then
@@ -59,8 +68,8 @@ jobs:
               echo ""
               echo "检测到你的 GitHub 账号 **尚未签署 CLA（贡献者许可协议）**。本仓库已启用自动化门禁：**未签署的 PR 无法合并**。"
               echo ""
-              echo "请回复「**我同意 CLA**」以声明你已阅读并同意 [CLA.md](https://github.com/$GITHUB_REPOSITORY/blob/main/CLA.md)；"
-              echo "随后请联系维护者将你的登录名加入签名名单 [.cla/signatures.json](https://github.com/$GITHUB_REPOSITORY/blob/main/.cla/signatures.json) 并对本检查执行 rerun，检查变绿后即可合并。"
+              echo "请在本 PR 回复「**我同意 CLA**」，即代表你已阅读并同意 [CLA.md](https://github.com/$GITHUB_REPOSITORY/blob/main/CLA.md)；"
+              echo "机器人会自动将你加入签名名单并让本检查（cla-check）直接变绿，**全程无需维护者手动操作、无需 rerun**。"
               echo ""
               echo "签署流程详见 [CONTRIBUTING.md](https://github.com/$GITHUB_REPOSITORY/blob/main/CONTRIBUTING.md) 与 [CLA.md](https://github.com/$GITHUB_REPOSITORY/blob/main/CLA.md)。"
             } > "$COMMENT_FILE"
@@ -70,3 +79,22 @@ jobs:
           fi
 
           exit 1
+
+  auto-sign:
+    # 仅在 issue_comment 事件上运行
+    if: github.event_name == 'issue_comment'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # 推送 .cla/signatures.json 到 main
+      pull-requests: write # 置 cla-check 状态 + 发完成评论
+    steps:
+      - name: Checkout default branch (已受信代码)
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Validate & auto-sign
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/cla_autosign.py
