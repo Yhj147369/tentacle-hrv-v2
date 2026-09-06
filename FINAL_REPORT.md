@@ -1,0 +1,71 @@
+# Tentacle HRV — 全流程检查报告
+
+> 检查时间：2026-09-06 · 检查范围：本地项目 / GitHub 仓库 / Koishi 论坛
+> 报告性质：只读健康检查快照（未修改任何业务代码）
+
+---
+
+## 一、项目全流程测试结果
+
+**项目整体健康：PASS，无阻断性问题。**
+
+| 环节 | 状态 | 说明 |
+|---|---|---|
+| 代码健康 | ✅ PASS | `py_compile server.py` 通过；`.gitignore` 敏感项齐（.env / certs / models / ffmpeg / latest.jpg / server.log 等）；`git status` 干净（仅历史遗留 `platformio.ini`）|
+| 服务运行 | ✅ PASS | 本机 `/`、`/test`、`/api/status`、公网 `bz9w6k.i996.me` 全部 HTTP 200；日志无 traceback |
+| 闭环状态 | 🟡 待机 | `serial_ok=false`（无 ESP32）、`latest.jpg` 超 10s 未更新 → AI 进入"图片过期暂停"待机态，属**预期故障保护**，接入画面/串口即恢复 |
+| 已实测通过 | ✅ | 手动指令→日志/data_log；TTS 合成（200 / audio/mpeg）；data_log 200 点滚动（图表数据源）；公网全链路；模拟画面流→AI 决策（强化提示词后指令行命中）；管理后台阈值运行时修改 |
+| 代码级确认 | ✅ | 事件状态机（events.json 合法，10 个事件）、事件选择写回与服务端 15s 超时自动选择逻辑就位 |
+| AI 余额 | ✅ | `ai_error=null`，本轮无 402 |
+
+> 小提示：Flask 现为 launcher/worker 正常双进程，`8080` 端口占用无冲突。
+
+### 各项能力实测清单
+
+| 能力 | 三态 | 证据 |
+|---|---|---|
+| 手动指令 → 后端记录 | ✅ 实测 PASS | `[下发:手动] SET 75 60 constant` 等已入 data_log |
+| AI 基于画面决策 | ✅ 实测 PASS | 模拟画面流 10 帧 → AI 输出 4 段剧情 + 4 条指令 |
+| AI 语音朗读（TTS） | ✅ 合成侧 PASS | `/tts` → 200 / audio/mpeg / ≥15KB；"出声"待浏览器确认 |
+| 氛围音效 | ✅ 逻辑 PASS | 4 档频率分档（hr>130→440Hz / 110-130→300Hz / <110→200Hz / null→180Hz）|
+| 事件弹窗链路 | 🟡 代码级确认 | AI 短时段未触发 `[EVENT]`（概率）；选择写回/超时自动选择逻辑就位 |
+| 图表数据源 | ✅ 实测 PASS | data_log 200 点环形滚动，每 ~3s 一点 |
+| 公网全链路 | ✅ 实测 PASS | HTTPS 公网 → i996 隧道 → Flask → AI → 状态回读 全通 |
+
+---
+
+## 二、GitHub 仓库状态（`github.com/Yhj147369/tentacle-hrv-v2`）
+
+| 项 | 值 |
+|---|---|
+| 默认分支 / HEAD | `main` = **`d210f45`**（含修复固件 / 修复体检 / 忽略运行态 / 强化提示词全部提交）|
+| 指标 | Star **2** / Fork 0 / Watch 1 · License GPL-3.0 · public |
+| 标签 | **v1.0.0 ~ v1.8.0 齐全**；v1.8.0 → `0e9cb46` |
+| Release | **v1.8.0 已发布**：`tentacle-hrv-v1.8.0.zip`（52KB，已下载 2 次）；旧 Release 8 个保留 |
+| Actions | 近 10 次**全部 success**（含 v1.8.0 "Build and Release" ✓、近期 main push 的 "Python application" ✓）|
+
+> ⚠️ 环境事实：本机 VPN/代理将 `github.com` / `api.github.com` 解析为 `127.0.0.1`（假 IP），访问需 `curl -k` 或 `git -c http.sslVerify=false`；本报告数据为真实线上状态。
+
+---
+
+## 三、Koishi 论坛浏览量与回复
+
+**主题**：[第3关！我也整了一个触手怪物，还是deepseek harness…](https://forum.koishi.xyz/t/topic/13546)（闲聊吹水 / 抽象大赏）
+
+| 指标 | 当前值 | 较上次 |
+|---|---|---|
+| **浏览量** | **279** | +6 |
+| **回复数** | **17 楼**（回复 16，楼主 12345611 占 11 楼）| — |
+| **点赞** | **14** | 持平 |
+| 参与用户 | 6 人 | — |
+| 话题创建 | 8 月 29 日 | — |
+| 最近活跃 | 5 小时前 | — |
+
+- **最新回复**：#17 = **v1.8.0 更新帖**（作者 `12345611`），其后暂无新互动；帖内 GitHub 链接指向 `tentacle-hrv-v2`（与仓库一致）
+- **管理动作**：#15 楼因被社区**举报而临时隐藏**（唯一一次），其余全部可正常阅读
+
+---
+
+## 四、结论
+
+项目代码与服务端到端健康（AI 剧情、TTS、手动指令、图表数据、公网链路均验证通过）；GitHub 仓库 + v1.8.0 Release + Actions 全部正常；Koishi 论坛有 **279 浏览量 / 17 楼 / 14 赞**，最新更新帖在列。当前仅差**真实硬件（ESP32 + 心率手环）与真人画面流**即可跑满完整闭环。
