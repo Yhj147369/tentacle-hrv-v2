@@ -129,7 +129,8 @@ def main() -> int:
     log(f"==> ✅ 通过校验：PR #{pr_number} 作者 {author} 回复同意 CLA")
 
     # ---- 名单操作 ----
-    with open(SIGN_FILE, encoding="utf-8") as fh:
+    # 注：signatures.json 历史上可能带 UTF-8 BOM（Windows 写入），须用 utf-8-sig 读取
+    with open(SIGN_FILE, encoding="utf-8-sig") as fh:
         data = json.load(fh)
     sigs = data.setdefault("signatures", [])
     if any(s.get("login") == author for s in sigs):
