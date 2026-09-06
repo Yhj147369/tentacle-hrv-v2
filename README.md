@@ -212,3 +212,5 @@ GPL-3.0ï¼Œè¯¦è§ LICENSEã€‚
 
 - åŸä½œè€…ï¼šra1nyxin/tentacle-monster-roleplay-esp32
 - DeepSeek API / Vosk / edge-tts / Chart.js
+
+<!-- cla-demo2: ÑİÊ¾Î´Ç© PR ±» cla-check À¹½ØµÄĞ§¹û£¬ÑéÖ¤ºó¹Ø±Õ -->
