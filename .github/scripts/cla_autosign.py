@@ -202,17 +202,31 @@ def ensure_pr_green(pr_number: int) -> str:
 # ---------------------------------------------------------------- 推送 main
 
 
+EXTRAHEADER_KEY = "http.https://github.com/.extraheader"
+
+
+def _b64_auth(token: str) -> str:
+    return base64.b64encode(f"x-access-token:{token}".encode("utf-8")).decode("ascii")
+
+
+def _restore_job_extraheader() -> None:
+    """把 checkout@v4 注入的 GITHUB_TOKEN extraheader 写回（保证后续降级路径仍可认证）。"""
+    run_git(["config", EXTRAHEADER_KEY, f"AUTHORIZATION: basic {_b64_auth(JOB_TOKEN)}"])
+
+
 def push_main_with_pat() -> bool:
-    """免维护模式：用 CLA_BOT_PAT 以 http.extraheader 形式直推 origin/main（绕过分支保护）。"""
-    b64 = base64.b64encode(f"x-access-token:{PAT}".encode("utf-8")).decode("ascii")
-    env_extra = {
-        "GIT_TERMINAL_PROMPT": "0",
-        "GIT_CONFIG_COUNT": "1",
-        "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
-        "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {b64}",
-    }
-    r = run_git(["push", "origin", "HEAD:main"], env_extra=env_extra)
-    if r.returncode != 0:
+    """免维护模式：用 CLA_BOT_PAT 直推 origin/main（绕过分支保护）。
+
+    注意：actions/checkout 已在 .git/config 注入 GITHUB_TOKEN 的 http.extraheader；若直接叠加 PAT
+    extraheader 会发出两个 Authorization 头 → git 400 "Duplicate header"。因此先 unset 掉原值、写入
+    PAT 值，推送后再恢复 job token 的 extraheader（无论成败）。
+    """
+    run_git(["config", "--unset-all", EXTRAHEADER_KEY])  # 无该键时 exit 5，可忽略
+    run_git(["config", EXTRAHEADER_KEY, f"AUTHORIZATION: basic {_b64_auth(PAT)}"])
+    r = run_git(["push", "origin", "HEAD:main"], env_extra={"GIT_TERMINAL_PROMPT": "0"})
+    ok = r.returncode == 0
+    _restore_job_extraheader()
+    if not ok:
         log(f"!! CLA_BOT_PAT 直推 main 失败: {r.stderr.strip()}")
         return False
     log("==> 已用 CLA_BOT_PAT 直推 .cla/signatures.json 到 main")
