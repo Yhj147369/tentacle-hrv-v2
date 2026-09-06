@@ -86,7 +86,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write # 推送 .cla/signatures.json 到 main
-      pull-requests: write # 置 cla-check 状态 + 发完成评论
+      checks: write # 创建同名 cla-check check run（required check 置绿机制）
+      pull-requests: write # 发完成评论
     steps:
       - name: Checkout default branch (已受信代码)
         uses: actions/checkout@v4
