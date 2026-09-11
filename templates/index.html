@@ -156,6 +156,8 @@
     <div>上次上传 <b id="up-time">-</b></div>
     <div>服务器串口 <b id="srv-status">-</b></div>
     <div>心率 <b id="hr">-</b></div>
+    <div>HRV(RMSSD) <b id="hrv">-</b></div>
+    <div>静息基线 <b id="hrv-base">-</b></div>
     <div>熔断提示 <b id="fuse">-</b></div>
     <div>最后指令 <b id="cmd">-</b></div>
   </div>
@@ -227,7 +229,20 @@
       <label>限幅最大强度 <input type="number" id="cfg-limit-max" value="50"></label>
       <label>PC 强度上限 <input type="number" id="cfg-pc-cap" value="80"></label>
       <label>最大时长(秒) <input type="number" id="cfg-max-dur" value="300"></label>
+      <hr style="border:none;border-top:1px solid #5f6368;margin:10px 0;">
+      <div style="font-size:12px;color:#9aa0a6;margin-bottom:6px;">
+        HRV（心率变异性）：0 = 用本会话自适应基线；填了数字则以你填的为准
+      </div>
+      <label>静息心率 (bpm，0=自适应) <input type="number" id="cfg-rest-hr" value="0" min="0" max="220"></label>
+      <label>HRV 基线 RMSSD (ms，0=自适应) <input type="number" id="cfg-base-rmssd" value="0" min="0" max="500"></label>
+      <label>HRV 限幅降幅 (%) <input type="number" id="cfg-hrv-limit-drop" value="40" min="10" max="90"></label>
+      <label>HRV 熔断降幅 (%) <input type="number" id="cfg-hrv-stop-drop" value="60" min="20" max="95"></label>
+      <label>心率超基线熔断 (+bpm) <input type="number" id="cfg-hr-stop-delta" value="65" min="20" max="180"></label>
+      <label>心率超基线限幅 (+bpm) <input type="number" id="cfg-hr-limit-delta" value="45" min="10" max="150"></label>
+      <label>HRV 窗口 (秒) <input type="number" id="cfg-hrv-window" value="120" min="15" max="600"></label>
+      <div id="cfg-hrv-state" style="font-size:12px;color:#9aa0a6;margin:6px 0;"></div>
       <button id="btn-save-config">保存配置</button>
+      <button id="btn-reset-hrv">重置 HRV 会话</button>
       <button id="btn-reload-events">重新加载事件池</button>
       <button id="btn-close-admin">关闭</button>
     </div>
@@ -242,6 +257,8 @@
   var upTime = document.getElementById('up-time');
   var srvStatus = document.getElementById('srv-status');
   var hrEl = document.getElementById('hr');
+  var hrvEl = document.getElementById('hrv');
+  var hrvBaseEl = document.getElementById('hrv-base');
   var fuseEl = document.getElementById('fuse');
   var cmdEl = document.getElementById('cmd');
   var aiNarr = document.getElementById('ai-narr');
@@ -776,6 +793,17 @@
         document.getElementById('cfg-limit-max').value = j.config.HR_LIMIT_MAX;
         document.getElementById('cfg-pc-cap').value = j.config.PC_LEVEL_CAP;
         document.getElementById('cfg-max-dur').value = j.config.MAX_DURATION_S;
+        document.getElementById('cfg-rest-hr').value = j.config.RESTING_HR;
+        document.getElementById('cfg-base-rmssd').value = j.config.BASELINE_RMSSD;
+        document.getElementById('cfg-hrv-limit-drop').value = j.config.HRV_LIMIT_DROP_PCT;
+        document.getElementById('cfg-hrv-stop-drop').value = j.config.HRV_STOP_DROP_PCT;
+        document.getElementById('cfg-hr-stop-delta').value = j.config.HR_STOP_DELTA;
+        document.getElementById('cfg-hr-limit-delta').value = j.config.HR_LIMIT_DELTA;
+        document.getElementById('cfg-hrv-window').value = j.config.HRV_WINDOW_SEC;
+        var act = (j.config.HRV_BASELINE_ACTIVE === null || j.config.HRV_BASELINE_ACTIVE === undefined)
+          ? '未建立' : (Number(j.config.HRV_BASELINE_ACTIVE).toFixed(1) + ' ms');
+        document.getElementById('cfg-hrv-state').textContent =
+          '当前生效 HRV 基线：' + act + '（来源：' + (j.config.HRV_SOURCE || '无') + '）';
       }
     });
   });
@@ -790,7 +818,14 @@
       HR_LIMIT_ABOVE: parseInt(document.getElementById('cfg-limit').value),
       HR_LIMIT_MAX: parseInt(document.getElementById('cfg-limit-max').value),
       PC_LEVEL_CAP: parseInt(document.getElementById('cfg-pc-cap').value),
-      MAX_DURATION_S: parseInt(document.getElementById('cfg-max-dur').value)
+      MAX_DURATION_S: parseInt(document.getElementById('cfg-max-dur').value),
+      RESTING_HR: parseInt(document.getElementById('cfg-rest-hr').value || 0),
+      BASELINE_RMSSD: parseInt(document.getElementById('cfg-base-rmssd').value || 0),
+      HRV_LIMIT_DROP_PCT: parseInt(document.getElementById('cfg-hrv-limit-drop').value),
+      HRV_STOP_DROP_PCT: parseInt(document.getElementById('cfg-hrv-stop-drop').value),
+      HR_STOP_DELTA: parseInt(document.getElementById('cfg-hr-stop-delta').value),
+      HR_LIMIT_DELTA: parseInt(document.getElementById('cfg-hr-limit-delta').value),
+      HRV_WINDOW_SEC: parseInt(document.getElementById('cfg-hrv-window').value)
     };
     try {
       const resp = await fetch(withKey('/api/config'), {
@@ -799,7 +834,19 @@
         body: JSON.stringify(payload)
       });
       const j = await resp.json();
-      if (j.ok) alert('配置已保存');
+      if (j.ok) alert('配置已保存（静息心率改动会同时重建 HRV 会话）');
+    } catch(e) { console.warn(e); }
+  });
+
+  document.getElementById('btn-reset-hrv').addEventListener('click', async function() {
+    try {
+      const resp = await fetch(withKey('/api/config'), {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({reset_hrv: true})
+      });
+      const j = await resp.json();
+      if (j.ok) alert('HRV 会话已重置，将重新采集静息基线');
     } catch(e) { console.warn(e); }
   });
 
@@ -826,6 +873,18 @@
       srvStatus.textContent = s.serial_ok ? '在线' : '离线(无串口)';
       srvStatus.className = s.serial_ok ? 'ok' : 'bad';
       hrEl.textContent = s.hr ? (s.hr + ' bpm') : '-';
+      // HRV：显示当前 RMSSD 与相对基线的偏离
+      if (s.hrv && s.hrv.rmssd) {
+        var devTxt = (s.hrv_dev_pct === null || s.hrv_dev_pct === undefined)
+          ? '基线采集中' : ((s.hrv_dev_pct > 0 ? '+' : '') + Number(s.hrv_dev_pct).toFixed(0) + '%');
+        hrvEl.textContent = Number(s.hrv.rmssd).toFixed(1) + ' ms (' + devTxt + ')';
+        hrvBaseEl.textContent = s.hrv.baseline_rmssd
+          ? (Number(s.hrv.baseline_rmssd).toFixed(1) + ' ms / ' + (s.hrv.source || ''))
+          : '未建立（等待采集）';
+      } else {
+        hrvEl.textContent = '-';
+        hrvBaseEl.textContent = '-';
+      }
       fuseEl.textContent = s.fuse_reason || '-';
       cmdEl.textContent = s.last_command || '-';
       aiNarr.textContent = s.ai_reasoning || '(本轮无思考)';

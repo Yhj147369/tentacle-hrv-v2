@@ -37,3 +37,6 @@ server_stderr.log
 
 # 本地私有接续摘要（含明文密钥，禁止提交）
 *.local.md
+
+# AgentTeams 编排产物（会话内协作目录，勿提交）
+.agent-teams/

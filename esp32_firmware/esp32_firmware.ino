@@ -29,6 +29,9 @@
  *  - 新增设备类型(Device Profile)适配框架(toy_profiles.h/.cpp)：玩具通道参数化，
  *    支持体感设备 A(默认，现协议逐字节不变)与体感设备 B类(预留，待逆向)。切换方式见下方
  *    ACTIVE_TOY_PROFILE 宏；设计见仓库 docs/体感设备适配说明.md。
+ *  - 修正心率特征解析：按 0x2A37 位标志读取心率(1/2 字节)与 RR-Interval(1/1024 秒→毫秒)，
+ *    修复旧实现「心率 16 位时 IBI 字节与心率重叠」「用 len>=4 代替 bit4 判断 RR 存在」
+ *    导致 IBI 恒错、后端 HRV 基线失效的问题。
  */
 
 #include <BLEDevice.h>
@@ -215,11 +218,30 @@ class ToyCallbacks : public BLEAdvertisedDeviceCallbacks {
 };
 
 // arduino-esp32 3.x 的通知回调签名
+// BLE 标准心率测量特征 0x2A37 字节布局（按位标志）：
+//   byte0  = flags：bit0=心率是否 16 位；bit4=是否携带 RR-Interval(RR 间隔)
+//   byte1+ = 心率（1 或 2 字节，小端）
+//   其后   = RR-Interval（2 字节，小端，单位 1/1024 秒）——仅当 bit4=1 时存在
+// 注意：旧实现从 data[2] 取 IBI，在「心率 16 位」时与心率字节重叠，且用 len>=4 代替 bit4
+// 判断 RR 是否存在，导致 IBI 恒为错误值（后端 HRV 基线会因此失效）。
 static void hrNotify(BLERemoteCharacteristic* pBLERemoteCharacteristic, uint8_t* data, size_t len, bool isNotify) {
   if (len < 2) return;
   uint8_t flags = data[0];
-  int hr = (flags & 0x01) ? (data[1] | (data[2] << 8)) : data[1];
-  int ibi = (len >= 4) ? (data[2] | (data[3] << 8)) : 0;
+  size_t idx = 1;
+  int hr = 0;
+  if (flags & 0x01) {                          // 心率 16 位（小端）
+    if (len < idx + 2) return;
+    hr = data[idx] | (data[idx + 1] << 8);
+    idx += 2;
+  } else {                                     // 心率 8 位
+    hr = data[idx];
+    idx += 1;
+  }
+  int ibi = 0;                                 // 0 = 本包无 RR-Interval（后端按「无 IBI」处理）
+  if ((flags & 0x10) && len >= idx + 2) {      // RR-Interval present
+    uint16_t rr = data[idx] | (data[idx + 1] << 8);
+    ibi = (int)((float)rr * 1000.0f / 1024.0f); // 1/1024 秒 → 毫秒
+  }
   Serial.printf("HR:%d,IBI:%d\n", hr, ibi);
 }
 
