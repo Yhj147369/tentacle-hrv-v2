@@ -167,6 +167,21 @@ check("伪迹未污染 RMSSD", S.hrv_state["rmssd"] is not None and S.hrv_state[
 S.set_config("RESTING_HR", 0)
 
 print()
+print("=== 8. 回归：手环不提供 RR-Interval 时明确报「无法计算 HRV」===")
+# 真机联调实测：部分手环只上报心率，0x2A37 的 bit4 不置位 → 后端永远拿不到 IBI。
+# 若此时仍显示/告知「正在采集静息基线」，用户会一直等一个不会出现的基线，
+# 还会误以为 HRV 保护已在工作。
+S.reset_hrv_session()
+for _ in range(25):
+    S._update_hrv_sample(None, 78)
+code, stage, text, dev = S.get_hrv_status(78)
+check("判定为 no_ibi 而非一直 collecting", code == "no_ibi" and stage == "no_ibi",
+      "code=%s stage=%s" % (code, stage))
+check("状态文本点明缺少 RR-Interval", "RR-Interval" in text)
+check("状态文本给出可执行结论（按绝对心率 / 换手环）", ("绝对心率" in text) and ("胸带" in text))
+check("HRV 偏离为 None（不参与限幅决策）", dev is None)
+
+print()
 print("=" * 60)
 print("通过 %d 项，失败 %d 项" % (len(PASS), len(FAIL)))
 if FAIL:

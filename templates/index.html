@@ -936,7 +936,16 @@
           : '未建立（等待采集）';
       } else {
         hrvEl.textContent = '-';
-        hrvBaseEl.textContent = '-';
+        // 没有 RMSSD 时也要说清原因：真机联调发现部分手环只在 0x2A37 里上报心率、
+        // 不带 RR-Interval，此时 HRV 永远建不起来，写「等待采集」会让人一直空等。
+        var noIbi = s.hrv && s.hrv.ibi_seen === 0 && (s.hrv.hr_seen || 0) >= 20;
+        if (noIbi) {
+          hrvBaseEl.textContent = '未建立（手环未提供 RR-Interval）';
+        } else if (s.hr) {
+          hrvBaseEl.textContent = '未建立（等待采集）';
+        } else {
+          hrvBaseEl.textContent = '未建立（无心率数据）';
+        }
       }
       fuseEl.textContent = s.fuse_reason || '-';
       cmdEl.textContent = s.last_command || '-';

@@ -40,6 +40,7 @@ from pathlib import Path
 from functools import wraps
 import random
 import secrets
+import sys
 
 import os
 os.environ["PATH"] = os.path.dirname(__file__) + os.pathsep + os.environ["PATH"]
@@ -341,10 +342,20 @@ def log_op(evt, action, detail=""):
 
 def log(msg):
     line = "[%s] %s" % (datetime.now().strftime("%H:%M:%S"), msg)
-    print(line)
+    # 先落盘再打印：文件永远用 UTF-8，能完整保存固件里的 ✅/⚠️ 等字符
     try:
         with open(LOG_FILE, "a", encoding="utf-8") as f:
             f.write(line + "\n")
+    except Exception:
+        pass
+    try:
+        print(line)
+    except UnicodeEncodeError:
+        # Windows 控制台默认 GBK(cp936)，固件会打印 ✅/⚠️ 这类符号 → print 抛 UnicodeEncodeError。
+        # 这个异常原本会一路冒泡回串口读取循环，导致「板子的原话没被记录、只剩 [串口] 读取异常」，
+        # 硬件联调时等于把最需要的信息屏蔽掉了。这里降级成 ASCII 占位，日志文件里仍是原文。
+        enc = sys.stdout.encoding or "utf-8"
+        print(line.encode(enc, "replace").decode(enc, "replace"))
     except Exception:
         pass
 
@@ -410,8 +421,12 @@ class SerialLink:
             except Exception as e:
                 log("[HRV] 更新失败: %s" % e)
             log("[心率] HR=%s IBI=%s" % (hr, ibi))
-        elif line.startswith(("OK", "PONG", "ERR", "TOY", "WATCHDOG")):
-            log("[ESP32] %s" % line)
+        else:
+            # 固件除心率外只在这几种时机说话：连接/断开、指令已被记录、真正写入设备、
+            # 时长结束自动停止、无法识别指令……这些正是硬件联调时最需要看见的信息，
+            # 早期实现只记录 OK/PONG/ERR/TOY/WATCHDOG 开头的行，于是那些中文告警被静默丢弃，
+            # 从 server.log 完全看不出板子在抱怨什么。现在一律记录（截断到 200 字符防刷）。
+            log("[ESP32] %s" % line[:200])
 
 def load_latest_image():
     if not LATEST_JPG.exists(): return None, None
@@ -435,6 +450,7 @@ SESSION_REST_LEARN_S = 90.0     # 开局采集静息基线的时长（秒）
 SESSION_REST_MIN_SAMPLES = 12   # 判定基线可用所需的最少有效 IBI 数量
 SESSION_GAP_RESET_S = 600.0     # 静息超过该时长未收到心率 → 重新采集
 STALE_WEARABLE_S = 10.0         # 心率数据超过该时长未更新视为不可用（防止用陈旧值做限幅判断）
+NO_IBI_HINT_HR_COUNT = 20       # 收到这么多次心率仍一个 IBI 都没有 → 判定该手环不提供 RR-Interval
 
 hrv_state = {"ibi": [], "rmssd": None, "baseline_hr": None, "baseline_rmssd": None,
              "session_start": None, "baseline_source": "none", "last_hr": None,
@@ -442,7 +458,11 @@ hrv_state = {"ibi": [], "rmssd": None, "baseline_hr": None, "baseline_rmssd": No
              # last_reject_ibi：上一个被判为「与窗口末端差分过大」而被丢弃的样本，
              #                用于区分「单个伪迹」与「心率水平真的换了台阶」（见 _update_hrv_sample）
              # segment_resets：本会话因台阶跃迁而重置 IBI 窗口的次数（仅用于诊断/测试）
-             "last_reject_ibi": None, "segment_resets": 0}
+             # hr_seen / ibi_seen：本会话累计收到的心率次数 / 合理区间 IBI 次数。
+             #   真机联调发现：有的手环只上报心率、0x2A37 不带 RR-Interval，
+             #   靠这两个计数才能把「还在采集基线」和「这台手环根本不给 RR」区分开。
+             "last_reject_ibi": None, "segment_resets": 0,
+             "hr_seen": 0, "ibi_seen": 0}
 
 
 def _smooth_ratio(curr, base, k=0.05):
@@ -462,6 +482,8 @@ def reset_hrv_session(reason=""):
         hrv_state["fingerprint"] = None
         hrv_state["last_reject_ibi"] = None
         hrv_state["segment_resets"] = 0
+        hrv_state["hr_seen"] = 0
+        hrv_state["ibi_seen"] = 0
         _state["hrv_rmssd"] = None
         _state["hrv_baseline"] = None
         _state["hrv_dev_pct"] = None
@@ -470,7 +492,8 @@ def reset_hrv_session(reason=""):
         log("[HRV] 会话已重置（%s）" % reason)
 
 
-def classify_hrv(hr, rmssd, base_hr, base_rmssd, has_data, source="none"):
+def classify_hrv(hr, rmssd, base_hr, base_rmssd, has_data, source="none",
+                 ibi_seen=1, hr_seen=0):
     """返回 (状态码, 阶段, 面向 AI 的状态文本, 偏离百分比或 None)。"""
     if not has_data or hr is None:
         return ("unknown", "no_data",
@@ -478,6 +501,16 @@ def classify_hrv(hr, rmssd, base_hr, base_rmssd, has_data, source="none"):
                 "请只依据画面推进剧情，不要假装知道玩家的身体状态。", None)
 
     if not base_hr or not base_rmssd:
+        # 真机联调发现：并非所有手环都会在 0x2A37 里带 RR-Interval。
+        # 若已收到大量心率、却一个合理区间的 IBI 都没见过，那不是「还在采集基线」，
+        # 而是这台手环根本不提供 RR —— 必须直说，否则界面会永远显示「正在采集」，
+        # 让人一直等一个不会出现的基线，还会误以为 HRV 保护已经在工作。
+        if ibi_seen <= 0 and hr_seen >= NO_IBI_HINT_HR_COUNT:
+            return ("no_ibi", "no_ibi",
+                    "【本会话生理状态】手环已在上报心率，但没有提供 RR-Interval（IBI，"
+                    "心率特征的 bit4），因此无法计算 HRV。本次会话 HRV 限幅/熔断不可用，"
+                    "请只依据绝对心率判断；若确实需要 HRV，请更换会上报 RR-Interval 的手环"
+                    "（胸带式通常支持，部分腕带不支持）。", None)
         return ("learning", "collecting",
                 "正在采集你的静息基线（开局约 60~90 秒，或心率刚恢复）。"
                 "当前估算 HRV(RMSSD) %s ms；基线未就绪时系统不做 HRV 限幅，"
@@ -532,6 +565,7 @@ def _update_hrv_sample(ibi, hr):
         gap_reset = (now - hrv_state["last_update"]) > SESSION_GAP_RESET_S
         hrv_state["last_hr"] = hr
         hrv_state["last_update"] = now
+        hrv_state["hr_seen"] = hrv_state.get("hr_seen", 0) + 1
         if hrv_state["session_start"] is None or gap_reset:
             hrv_state["session_start"] = now
             if gap_reset:
@@ -543,6 +577,7 @@ def _update_hrv_sample(ibi, hr):
                     hrv_state["baseline_source"] = "none"
 
         if ibi is not None and 250 <= ibi <= 2500:   # 合理 IBI 区间（24~240 bpm）
+            hrv_state["ibi_seen"] = hrv_state.get("ibi_seen", 0) + 1
             seq = hrv_state["ibi"]
             ibi_f = float(ibi)
             prev_reject = hrv_state.get("last_reject_ibi")
@@ -629,8 +664,11 @@ def get_hrv_status(hr):
         base_rmssd = hrv_state["baseline_rmssd"]
         source = hrv_state["baseline_source"]
         fresh = (now - hrv_state["last_update"]) <= STALE_WEARABLE_S
+        ibi_seen = hrv_state.get("ibi_seen", 0)
+        hr_seen = hrv_state.get("hr_seen", 0)
 
-    code, stage, text, dev = classify_hrv(hr, rmssd, base_hr, base_rmssd, fresh, source)
+    code, stage, text, dev = classify_hrv(hr, rmssd, base_hr, base_rmssd, fresh, source,
+                                          ibi_seen=ibi_seen, hr_seen=hr_seen)
     with _lock:
         _state["hrv_rmssd"] = rmssd
         _state["hrv_baseline"] = base_rmssd
@@ -1100,6 +1138,9 @@ def api_status():
             "baseline_hr": hrv_state["baseline_hr"],
             "source": hrv_state["baseline_source"],
             "samples": len(hrv_state["ibi"]),
+            # hr_seen 很大而 ibi_seen 为 0 = 该手环不提供 RR-Interval（前端据此给出明确提示）
+            "hr_seen": hrv_state.get("hr_seen", 0),
+            "ibi_seen": hrv_state.get("ibi_seen", 0),
         }
     return jsonify(s)
 
