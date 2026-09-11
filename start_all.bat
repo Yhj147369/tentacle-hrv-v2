@@ -32,11 +32,9 @@ if errorlevel 1 (
 )
 
 if not defined ACCESS_KEY (
-    echo [错误] .env 里没有配置 ACCESS_KEY。
-    echo         请在 .env 中加一行：ACCESS_KEY=你的访问口令
-    echo         然后用同一个口令访问控制页（?key=你的访问口令）。
-    pause
-    exit /b 1
+    echo [提示] .env 未配置 ACCESS_KEY：后端会自动生成一个随机口令，
+    echo         并打印在「Flask后端」窗口的日志里（[安全] 开头那行），用那个口令访问。
+    echo         想固定下来就往 .env 里加一行：ACCESS_KEY=你的访问口令
 )
 
 REM 启动 Flask 后端
@@ -67,8 +65,12 @@ start "内网穿透" cmd /k "ssh -o ServerAliveInterval=30 -N -R 0:127.0.0.1:808
 echo.
 echo 启动完成！
 echo.
-if defined PUBLIC_URL echo 平板访问地址: %PUBLIC_URL%/?key=%ACCESS_KEY%
-echo 本机访问地址: http://127.0.0.1:8080/?key=%ACCESS_KEY%
+if defined ACCESS_KEY (
+    if defined PUBLIC_URL echo 平板访问地址: %PUBLIC_URL%/?key=%ACCESS_KEY%
+    echo 本机访问地址: http://127.0.0.1:8080/?key=%ACCESS_KEY%
+) else (
+    echo 访问地址: http://127.0.0.1:8080/  （口令见「Flask后端」窗口日志里的 [安全] 行）
+)
 echo.
 echo 请保持新开窗口不要关闭；如需停止，直接关闭对应窗口。
 echo.

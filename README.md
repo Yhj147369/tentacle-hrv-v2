@@ -154,10 +154,10 @@ SERIAL_BAUD=115200
 INTERVAL_SECONDS=3
 IMAGE_MAX_WIDTH=640
 IMAGE_STALE_TIMEOUT=10
-# 访问口令（务必改掉默认值！）
-ACCESS_KEY=改成一个强口令
+# 访问口令：留空则每次启动自动生成随机口令并打印一次；想固定就填一个强口令
+ACCESS_KEY=
 BASIC_USER=admin
-BASIC_PASS=改成一个强口令
+BASIC_PASS=
 ```
 
 每个变量的含义见 `.env.example` 的注释；`thinking` 三档（`enabled` 带推理预算 / `disabled` 最快最省 / `auto` 不传参）的取舍也写在那里。
@@ -237,7 +237,7 @@ arduino-cli upload -p COM3 --fqbn esp32:esp32:esp32 esp32_firmware
 ## ⚠️ 安全注意事项
 
 - 不要将 `.env`、`certs/`、`models/`、`ffmpeg.exe`、`local.secrets.bat`、`*.local.md` 提交到 Git
-- **务必改掉默认访问口令**：`ACCESS_KEY` / `BASIC_PASS` 的默认值都是 `123456`，服务经隧道暴露到公网后等于没有口令（改 `.env` 即可，启动时会打印提醒）
+- **口令不再是「默认 123456」**：`ACCESS_KEY` / `BASIC_PASS` 从 `.env` 读取；**留空则每次启动自动生成随机口令并在启动日志里打印一次**，所以服务经隧道暴露到公网时不会带着一个人人皆知的弱口令（仍建议在 `.env` 里固定成自己的强口令）
 - 心率超过 130 自动强制 STOP，HRV 相对基线大幅下降也会强制 STOP（阈值均可在 DLC9 管理后台修改）
 - 蓝牙玩具物理强度上限已在固件中限制为 60%
 - DLC3 随机事件在心率偏高时自动降级为放松事件

@@ -45,9 +45,12 @@ b64 = base64.b64encode(buf.tobytes()).decode()
 payload = {
     "model": model,
     "messages": [
-        {"role": "system", "content": "你是测试助手。只回一行：OK 加一个数字。"},
+        # 系统提示词必须与「验证 AI 能否吐出协议合法末行」这一目的对齐：
+        # 早期版本写的是「只回一行：OK 加一个数字」，结果模型忠实执行该约束、
+        # 正文永远是「OK 10」，这条冒烟测试等于什么也没验证。
+        {"role": "system", "content": "你是测试助手。用一句话说明画面，并在正文最后单独一行输出一条设备指令。"},
         {"role": "user", "content": [
-            {"type": "text", "text": "这是什么颜色方块？最后一行输出 SET 10 5 constant"},
+            {"type": "text", "text": "这是什么颜色方块？最后一行必须单独输出：SET 10 5 constant"},
             {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + b64}},
         ]},
     ],

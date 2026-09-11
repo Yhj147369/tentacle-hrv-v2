@@ -39,6 +39,7 @@ from datetime import datetime
 from pathlib import Path
 from functools import wraps
 import random
+import secrets
 
 import os
 os.environ["PATH"] = os.path.dirname(__file__) + os.pathsep + os.environ["PATH"]
@@ -974,12 +975,21 @@ app = Flask(__name__, template_folder=str(BASE_DIR / "templates"))
 
 auth = HTTPBasicAuth()
 # 凭据一律从环境变量（.env，已被 .gitignore 忽略）读取：写死在源码里等于把口令公开到仓库。
-# 下面的默认值只保证「本机第一次能跑起来」，公开部署前必须改掉。
-ACCESS_KEY = os.environ.get("ACCESS_KEY", "123456")
-BASIC_USER = os.environ.get("BASIC_USER", "admin")
-BASIC_PASS = os.environ.get("BASIC_PASS", "123456")
+# 未配置时**自动生成随机口令并在启动日志里打印一次**——仓库里不再存在「可以直接用」的弱默认口令
+# （旧版本默认 123456，配合内网穿透等于把服务公开给所有人）。
+ACCESS_KEY = os.environ.get("ACCESS_KEY", "").strip()
+AUTO_ACCESS_KEY = False
+if not ACCESS_KEY:
+    ACCESS_KEY = "hrv-" + secrets.token_urlsafe(9)
+    AUTO_ACCESS_KEY = True
+
+BASIC_USER = os.environ.get("BASIC_USER", "").strip() or "admin"
+BASIC_PASS = os.environ.get("BASIC_PASS", "").strip()
+AUTO_BASIC_PASS = False
+if not BASIC_PASS:
+    BASIC_PASS = secrets.token_urlsafe(12)
+    AUTO_BASIC_PASS = True
 USERS = {BASIC_USER: BASIC_PASS}
-USING_DEFAULT_CREDENTIALS = (ACCESS_KEY == "123456" or BASIC_PASS == "123456")
 
 @auth.verify_password
 def verify_password(username, password):
@@ -1274,8 +1284,12 @@ if __name__ == "__main__":
         else:
             log("[警告] --https 但证书不存在, 回退 http")
     proto = "https" if ssl_ctx else "http"
-    if USING_DEFAULT_CREDENTIALS:
-        log("[安全] 正在使用默认口令（ACCESS_KEY / BASIC_PASS = 123456）。"
-            "对外暴露或长期运行前，请在 .env 中改成强口令。")
+    if AUTO_ACCESS_KEY:
+        log("[安全] 未配置 ACCESS_KEY，本次已自动生成访问口令：%s"
+            "（访问 %s://%s:%d/?key=%s；建议写进 .env 固定下来）" % (ACCESS_KEY, proto, args.host, args.port, ACCESS_KEY))
+    if AUTO_BASIC_PASS:
+        log("[安全] 未配置 BASIC_PASS，本次已自动生成 Basic 口令：用户 %s / 口令 %s" % (BASIC_USER, BASIC_PASS))
+    if not (AUTO_ACCESS_KEY or AUTO_BASIC_PASS):
+        log("[安全] 访问口令已从 .env 载入（不会打印明文）")
     print("服务启动: %s://%s:%d/  AI模型=%s  串口=%s(ok=%s)" % (proto, args.host, args.port, DEEPSEEK_MODEL, SERIAL_PORT, serial_link.ok))
     app.run(host=args.host, port=args.port, ssl_context=ssl_ctx, threaded=True)
