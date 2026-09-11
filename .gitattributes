@@ -1,0 +1,17 @@
+# 批处理脚本必须用 CRLF 检出：
+# cmd.exe 解析「只有 LF 行尾」的 .bat 非常脆弱 —— goto :label 会报「找不到批处理标签」、
+# 括号块与 %%a 变量会被吞掉或错位，表现为「脚本莫名其妙失败」。
+# 这条规则保证无论谁 clone、用什么平台，.bat 都是 CRLF。
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 其它文本文件统一按 LF 存储，避免跨平台噪音
+*.py   text eol=lf
+*.ino  text eol=lf
+*.h    text eol=lf
+*.cpp  text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.html text eol=lf
