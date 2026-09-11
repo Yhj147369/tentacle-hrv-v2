@@ -1,6 +1,10 @@
 # 心率联动 AI 遥控系统
 
-平板摄像头 + 心率手环 + DeepSeek 多模态 + ESP32 蓝牙玩具 的实时闭环。
+> ⚠️ **本文件是项目早期（旧目录结构 / 5000 端口时期）的 README，内容已大量过时**
+> （例如端口、`start_server.bat`、根目录文件布局、无 `?key=` 访问控制、无 DLC 与 HRV 说明）。
+> 请以仓库根目录的 [`README.md`](../README.md) 为准；本文件仅作历史留档。
+
+平板摄像头 + 心率手环 + DeepSeek 多模态 + ESP32 蓝牙反馈设备 的实时闭环。
 
 ## 零安装设计
 - **平板**: 不装任何东西, 浏览器打开链接即可(页面由电脑 Flask 渲染)。
@@ -85,6 +89,6 @@ HR:75,IBI:800
 
 ## 七、常见问题
 - 平板打不开摄像头: 必须 https 访问。
-- AI 输出空: 确认模型是 deepseek-v4-flash-vision-exp 且 max_tokens 够大。
+- AI 输出空: 确认模型是 deepseek-flash 且 max_tokens 够大（推理预算也被计入 max_tokens）。
 - 心率显示"-": 手环广播名是否含 HR_NAME_FILTER 关键字。
 - 玩具不动: 先按逆向指南第3步用 ble_write.py 试写确认协议。

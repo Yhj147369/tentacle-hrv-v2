@@ -1,6 +1,9 @@
 # Tentacle HRV — 多模态 AI 闭环体感控制系统
 
-基于 DeepSeek 多模态 API，整合 **平板摄像头拍照 + 心率手环 BLE 数据 + 网页控制面板 + ESP32 蓝牙中转 + 蓝牙玩具反馈** 的实时闭环控制系统。  
+> ⚠️ **本文件是早期版本的 README，已过时**（缺少 DLC6–DLC9、HRV 引擎、CLA/贡献流程等内容）。
+> 请以仓库根目录的 [`README.md`](../README.md) 为准；本文件仅作历史留档。
+
+基于 DeepSeek 多模态 API，整合 **平板摄像头拍照 + 心率手环 BLE 数据 + 网页控制面板 + ESP32 蓝牙中转 + 蓝牙反馈设备** 的实时闭环控制系统。  
 核心创新在 **输入端**：增加心率/HRV 实时监测和语音情绪识别（可选）。
 
 ## ✨ 功能特性
@@ -44,7 +47,8 @@ pip install -r requirements.txt
 
 ```ini
 DEEPSEEK_API_KEY=你的DeepSeek密钥
-DEEPSEEK_MODEL=deepseek-v4-flash-vision-exp
+# 官方正式名；旧别名 deepseek-v4-flash-vision-exp 已下线
+DEEPSEEK_MODEL=deepseek-flash
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 SERIAL_PORT=COM3
 SERIAL_BAUD=115200
@@ -64,21 +68,21 @@ python server.py --port 8080
 
 ### 3. 启动内网穿透（可选，供平板外网访问）
 
-使用 i996 或其他隧道工具，将本地 8080 端口映射到公网 HTTPS。  
-示例（i996）：
+使用隧道工具（如 i996、cloudflared、ngrok 等）将本地 8080 端口映射到公网 HTTPS。
+以 SSH 反向隧道为例（**用户名/主机/端口换成你自己的；这些属于个人凭据，不要写进仓库**）：
 
 ```bash
-ssh -o StrictHostKeyChecking=no -R 0:127.0.0.1:8080 ClothoUseServerInforaqo17875@v2.i996.me -p 8222
+ssh -o ServerAliveInterval=30 -N -R 0:127.0.0.1:8080 用户名@隧道主机 -p 端口
 ```
 
-平板访问 i996 提供的固定域名即可。
+平板访问隧道服务提供的固定域名即可。
 
 ### 4. 打开平板控制页面
 
-- 本机测试：`http://127.0.0.1:8080`  
-- 平板访问：`https://你的域名`（需 HTTPS）
+- 本机测试：`http://127.0.0.1:8080/?key=<你的访问口令>`
+- 平板访问：`https://你的域名/?key=<你的访问口令>`（需 HTTPS）
 
-登录账号：`admin` / `123456`（可在 `server.py` 中修改）
+访问口令由 `.env` 的 `ACCESS_KEY` 决定；未带 `?key=` 时会退回 HTTP Basic 认证（`BASIC_USER` / `BASIC_PASS`）。**默认值都是 `123456`，部署前必须改掉。**
 
 ## 🎮 使用说明
 

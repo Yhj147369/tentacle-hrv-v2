@@ -2,17 +2,21 @@
 
 > 检查时间：2026-09-06 · 检查范围：本地项目 / GitHub 仓库 / Koishi 论坛
 > 报告性质：只读健康检查快照（未修改任何业务代码）
+>
+> ⚠️ **这是一份历史快照，结论已被后续工作取代**：其中的 `PASS / 无阻断性问题` 只覆盖当时
+> 的软件侧冒烟范围，未涉及文档正确性、CLA 门禁与后续发现的 HRV 缺陷；`.env` 示例中的模型名、
+> 图表的「200 点环形滚动」归属等表述也已过时。请以根目录 [`README.md`](README.md) 与代码为准。
 
 ---
 
 ## 一、项目全流程测试结果
 
-**项目整体健康：PASS，无阻断性问题。**
+**项目整体健康：PASS，无阻断性问题。**（快照结论，见上方说明）
 
 | 环节 | 状态 | 说明 |
 |---|---|---|
 | 代码健康 | ✅ PASS | `py_compile server.py` 通过；`.gitignore` 敏感项齐（.env / certs / models / ffmpeg / latest.jpg / server.log 等）；`git status` 干净（仅历史遗留 `platformio.ini`）|
-| 服务运行 | ✅ PASS | 本机 `/`、`/test`、`/api/status`、公网 `bz9w6k.i996.me` 全部 HTTP 200；日志无 traceback |
+| 服务运行 | ✅ PASS | 本机 `/`、`/test`、`/api/status`、公网隧道地址（此处略去）全部 HTTP 200；日志无 traceback |
 | 闭环状态 | 🟡 待机 | `serial_ok=false`（无 ESP32）、`latest.jpg` 超 10s 未更新 → AI 进入"图片过期暂停"待机态，属**预期故障保护**，接入画面/串口即恢复 |
 | 已实测通过 | ✅ | 手动指令→日志/data_log；TTS 合成（200 / audio/mpeg）；data_log 200 点滚动（图表数据源）；公网全链路；模拟画面流→AI 决策（强化提示词后指令行命中）；管理后台阈值运行时修改 |
 | 代码级确认 | ✅ | 事件状态机（events.json 合法，10 个事件）、事件选择写回与服务端 15s 超时自动选择逻辑就位 |
