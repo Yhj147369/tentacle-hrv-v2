@@ -17,7 +17,8 @@ name: CLA
 
 on:
   pull_request_target:
-    types: [opened, reopened, synchronize]
+    # edited：PR 被改写目标分支（retarget）到 main 时也要重新校验 CLA
+    types: [opened, reopened, synchronize, edited]
   issue_comment:
     types: [created]
 
@@ -88,6 +89,11 @@ jobs:
   auto-sign:
     # 仅在 issue_comment 事件上运行
     if: github.event_name == 'issue_comment'
+    # 串行化：两位贡献者同时回复签署语时，两个 job 会并发 push main，
+    # 非快进被拒后连降级路径也可能失败 → 签名静默丢失。排队执行即可避免。
+    concurrency:
+      group: cla-autosign
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     permissions:
       contents: write # 推送 .cla/signatures.json 到 main

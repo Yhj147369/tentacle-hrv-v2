@@ -256,12 +256,11 @@ def push_main_degraded(sha: str) -> bool:
     log(f"==> 已为 push 目标 commit {sha} 创建 cla-check=success check run")
     r = push_origin()
     if r.returncode != 0:
-        # 最后再试一次关闭 ssl 校验（加速器/代理证书场景）
-        r = run_git(["push", "origin", "HEAD:main"], env_extra={"GIT_SSL_NO_VERIFY": "true"})
-        if r.returncode != 0:
-            log(f"!! push main 仍然失败: {r.stderr.strip()}")
-            run_git(["push", "origin", "--delete", tmp_branch])
-            return False
+        # 这里以前会再用 GIT_SSL_NO_VERIFY=true 重试一次：在携带推送凭据的操作上关闭
+        # TLS 校验，等于给中间人让路，且掩盖真实的证书问题。改为如实失败并留下日志。
+        log(f"!! push main 失败: {r.stderr.strip()}")
+        run_git(["push", "origin", "--delete", tmp_branch])
+        return False
     run_git(["push", "origin", "--delete", tmp_branch])
     log("==> 已清理临时分支；已推送 .cla/signatures.json 到 main")
     return True

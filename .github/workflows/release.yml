@@ -28,8 +28,8 @@ jobs:
           pip install flake8
 
       - name: Lint with flake8
-        continue-on-error: true
         run: |
+          # 语法级错误必须拦下来：以前这里是 continue-on-error，等于语法错误的 tag 也照发 Release
           flake8 server.py --count --select=E9,F63,F7,F82 --show-source --statistics
 
       - name: Package project
@@ -45,7 +45,12 @@ jobs:
             -x "server.log" \
             -x "temp_audio.wav" \
             -x "__pycache__/*" \
-            -x "*.pyc"
+            -x "*.pyc" \
+            -x ".cla/*" \
+            -x "tests/*" \
+            -x ".agent-teams/*" \
+            -x ".dsh-vision-router/*" \
+            -x "*.local.md"
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -60,15 +65,16 @@ jobs:
             ### 包含内容
             - 后端服务 `server.py`
             - 前端控制面板 `templates/index.html`
-            - ESP32 固件源码
-            - README、LICENSE、.gitignore
+            - ESP32 固件源码（含 `toy_profiles.h/.cpp` 设备类型 profile）
+            - 文档 `docs/`、README、LICENSE、`.env.example`
             
             ### 不包含
             - 大型模型文件（`models/`）
             - `ffmpeg.exe`
             - SSL 证书 (`certs/`)
-            - 环境变量文件 `.env`
+            - 环境变量文件 `.env`（请复制 `.env.example` 自行填写）
             - 运行时生成的图片/心率/日志
+            - 仓库内部文件：`.github/`、`.cla/`（贡献者签署名单）、`tests/`、`.agent-teams/`、`*.local.md`
             
             请自行准备上述文件后运行。
         env:
