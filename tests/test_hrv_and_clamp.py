@@ -6,6 +6,8 @@ r"""Tentacle HRV 逻辑单元测试（不需要手环 / 串口 / API Key）
   2. 静息心率手动覆盖（RESTING_HR）
   3. clamp_command 的绝对阈值 + 相对基线偏离双重约束
   4. parse_command 只认正文最后一行
+  5. 回归：心率台阶跃迁不再锁死 IBI 窗口（旧实现会让 HRV 限幅静默失效最长 120 秒）
+  6. 回归：单个伪迹/丢拍不清空窗口（不误伤正常样本）
 
 运行：.\venv\Scripts\python.exe tests\test_hrv_and_clamp.py
 注意：导入 server.py 会加载 Vosk 模型（约 10~60 秒），属预期。
@@ -121,6 +123,48 @@ S.reset_hrv_session()
 code, stage, text, dev = S.get_hrv_status(None)
 check("无心率数据判定为 unknown/no_data", code == "unknown" and stage == "no_data", code)
 check("无数据时不触发 STOP（hr=None）", S.clamp_command("SET 40 8 sine", None, None) == "SET 40 8 sine")
+
+print()
+print("=== 6. 回归：心率台阶跃迁不再锁死 HRV 窗口 ===")
+# 旧实现：差分 >250ms 的样本只被丢弃、不推进比较基准，于是持续跃迁后每个新样本都被拿去
+# 和陈旧的末端样本比较、全判为异常 → 窗口冻结在跃迁前的静息值 → dev 恒为 0%、
+# HRV 限幅/熔断静默失效，直到旧样本熬过整个窗口（默认 120 秒）才自愈。
+S.reset_hrv_session()
+S.set_config("RESTING_HR", 60)
+feed(rest_ibis, 60)
+S.get_hrv_status(60)
+n_before = len(S.hrv_state["ibi"])
+feed([650 + (5 if i % 2 else -5) for i in range(12)], 92)   # 阶跃到 92bpm
+n_after = len(S.hrv_state["ibi"])
+code, stage, text, dev = S.get_hrv_status(92)
+check("窗口未被冻结在旧静息样本上", n_after < n_before, "窗口 %d → %d" % (n_before, n_after))
+check("窗口已按新水平重建", n_after >= 8, "新窗口样本数=%d" % n_after)
+check("跃迁被记录为段重置", S.hrv_state.get("segment_resets", 0) >= 1,
+      "segment_resets=%s" % S.hrv_state.get("segment_resets"))
+check("HRV 偏离立即可用（无需等 120 秒）", dev is not None and dev < -40, "dev=%s" % dev)
+check("台阶跃迁后判定为过载", code == "overload", "code=%s" % code)
+check("不再反复剔除新样本", S.hrv_state.get("last_reject_ibi") is None,
+      "last_reject_ibi=%s" % S.hrv_state.get("last_reject_ibi"))
+
+print()
+print("=== 7. 回归：单个伪迹/丢拍不清空窗口（不误伤）===")
+S.reset_hrv_session()
+S.set_config("RESTING_HR", 60)
+feed(rest_ibis, 60)
+S.get_hrv_status(60)
+resets_before = S.hrv_state.get("segment_resets", 0)
+n0 = len(S.hrv_state["ibi"])
+S._update_hrv_sample(1600, 60)     # 单个丢拍：多出一个长间期，应被丢弃
+n1 = len(S.hrv_state["ibi"])
+feed([1000 + (15 if i % 2 else -15) for i in range(10)], 60)
+n2 = len(S.hrv_state["ibi"])
+check("伪迹样本被丢弃", n1 == n0, "窗口 %d → %d" % (n0, n1))
+check("伪迹未触发段重置", S.hrv_state.get("segment_resets", 0) == resets_before,
+      "segment_resets=%s" % S.hrv_state.get("segment_resets"))
+check("后续正常样本继续累积", n2 == n1 + 10, "窗口 %d → %d" % (n1, n2))
+check("伪迹未污染 RMSSD", S.hrv_state["rmssd"] is not None and S.hrv_state["rmssd"] < 40,
+      "rmssd=%s" % (S.hrv_state["rmssd"] if S.hrv_state["rmssd"] else None))
+S.set_config("RESTING_HR", 0)
 
 print()
 print("=" * 60)

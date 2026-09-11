@@ -437,7 +437,11 @@ STALE_WEARABLE_S = 10.0         # 心率数据超过该时长未更新视为不�
 
 hrv_state = {"ibi": [], "rmssd": None, "baseline_hr": None, "baseline_rmssd": None,
              "session_start": None, "baseline_source": "none", "last_hr": None,
-             "last_update": 0.0, "fingerprint": None}
+             "last_update": 0.0, "fingerprint": None,
+             # last_reject_ibi：上一个被判为「与窗口末端差分过大」而被丢弃的样本，
+             #                用于区分「单个伪迹」与「心率水平真的换了台阶」（见 _update_hrv_sample）
+             # segment_resets：本会话因台阶跃迁而重置 IBI 窗口的次数（仅用于诊断/测试）
+             "last_reject_ibi": None, "segment_resets": 0}
 
 
 def _smooth_ratio(curr, base, k=0.05):
@@ -455,6 +459,8 @@ def reset_hrv_session(reason=""):
         hrv_state["session_start"] = None
         hrv_state["baseline_source"] = "none"
         hrv_state["fingerprint"] = None
+        hrv_state["last_reject_ibi"] = None
+        hrv_state["segment_resets"] = 0
         _state["hrv_rmssd"] = None
         _state["hrv_baseline"] = None
         _state["hrv_dev_pct"] = None
@@ -520,6 +526,7 @@ def classify_hrv(hr, rmssd, base_hr, base_rmssd, has_data, source="none"):
 def _update_hrv_sample(ibi, hr):
     """收到一次心率上报时调用：维护 IBI 滑动窗口、推进会话计时、更新/自适应静息基线。"""
     now = time.time()
+    segment_reset = False
     with _lock:
         gap_reset = (now - hrv_state["last_update"]) > SESSION_GAP_RESET_S
         hrv_state["last_hr"] = hr
@@ -536,13 +543,31 @@ def _update_hrv_sample(ibi, hr):
 
         if ibi is not None and 250 <= ibi <= 2500:   # 合理 IBI 区间（24~240 bpm）
             seq = hrv_state["ibi"]
-            # 生理不可能差分过滤：相邻 IBI 差 >250ms 只可能来自信号漏拍或「数据段拼接」
-            # （例如设备重连、或基线段与活动段相邻）。若不剔除，这个巨大的差分会被
-            # RMSSD 平方放大、把变异性假性抬高，导致短暂的「过载判定失效」。
-            if seq and abs(float(ibi) - seq[-1][1]) > 250.0:
-                hrv_state["last_diff_reject"] = hrv_state.get("last_diff_reject", 0) + 1
+            ibi_f = float(ibi)
+            prev_reject = hrv_state.get("last_reject_ibi")
+            # 与窗口末端样本差分 >250ms：只可能是「单个丢拍/运动伪迹」或「心率水平真的换了台阶」
+            # （受惊、或设备重连造成的数据段拼接）。两者都不能任由这个巨大差分被 RMSSD 平方放大，
+            # 但处理方式必须区分——早期实现一律「丢弃该样本且不推进参考点」，会踩这个坑：
+            #   持续跃迁后，每个新样本都被拿去和那个**陈旧的末端样本**比较、全部判为异常，
+            #   于是窗口被冻结在跃迁前的静息值上 → HRV 偏离恒为 0%、显示「HRV 接近静息基线」，
+            #   HRV 限幅/熔断静默失效，直到旧样本熬过整个窗口（默认 120 秒）才自愈。
+            if seq and abs(ibi_f - seq[-1][1]) > 250.0:
+                if prev_reject is not None and abs(ibi_f - prev_reject) <= 250.0:
+                    # 连续两个样本彼此接近、却都远离旧窗口 → 认定是真实台阶：
+                    # 旧窗口属于另一个生理段，整体作废（只重置样本，静息基线保留并继续作为比较基准）
+                    hrv_state["last_diff_reject"] = hrv_state.get("last_diff_reject", 0) + 1
+                    hrv_state["segment_resets"] = hrv_state.get("segment_resets", 0) + 1
+                    seq.clear()
+                    seq.append((now, ibi_f))
+                    hrv_state["last_reject_ibi"] = None
+                    segment_reset = True
+                else:
+                    # 单个伪迹/丢拍：丢弃该样本，窗口保持不变，等待下一个样本判定
+                    hrv_state["last_diff_reject"] = hrv_state.get("last_diff_reject", 0) + 1
+                    hrv_state["last_reject_ibi"] = ibi_f
             else:
-                seq.append((now, float(ibi)))
+                seq.append((now, ibi_f))
+                hrv_state["last_reject_ibi"] = None
             cutoff = now - get_hrv_window()
             while seq and seq[0][0] < cutoff:
                 seq.pop(0)
@@ -553,6 +578,9 @@ def _update_hrv_sample(ibi, hr):
         manual_hr = get_resting_hr()
         manual_rmssd = int(get_config("BASELINE_RMSSD", 0) or 0)
         session_age = now - (hrv_state["session_start"] or now)
+
+    if segment_reset:
+        log("[HRV] 检测到心率台阶跃迁：IBI 窗口已重置（静息基线保留，下一拍起重新累积 RMSSD）")
 
     ibis = [v for _, v in seq if 250 <= v <= 2500]
     # RMSSD = sqrt(mean(diff(IBI)^2))：短时心率变异性最常用的指标
@@ -945,8 +973,13 @@ def main_loop():
 app = Flask(__name__, template_folder=str(BASE_DIR / "templates"))
 
 auth = HTTPBasicAuth()
-USERS = {"admin": "123456"}
-ACCESS_KEY = "123456"
+# 凭据一律从环境变量（.env，已被 .gitignore 忽略）读取：写死在源码里等于把口令公开到仓库。
+# 下面的默认值只保证「本机第一次能跑起来」，公开部署前必须改掉。
+ACCESS_KEY = os.environ.get("ACCESS_KEY", "123456")
+BASIC_USER = os.environ.get("BASIC_USER", "admin")
+BASIC_PASS = os.environ.get("BASIC_PASS", "123456")
+USERS = {BASIC_USER: BASIC_PASS}
+USING_DEFAULT_CREDENTIALS = (ACCESS_KEY == "123456" or BASIC_PASS == "123456")
 
 @auth.verify_password
 def verify_password(username, password):
@@ -1068,6 +1101,18 @@ def event_choice():
     option_text = str(data.get("option") or "").strip()
     if not option_text:
         return jsonify({"ok": False, "error": "empty option"}), 400
+
+    # 丢弃「迟到/过期」的选择：前端 15s 倒计时与服务端 15s 兜底可能先后触发，
+    # 若不做校验，一个已经属于上一个事件的选择会被记到「当前」这个新事件上，
+    # 于是剧情走向与生理状态记录双双错位。
+    sent_id = str(data.get("event_id") or "").strip()
+    if active_event is None:
+        log_op("warn", "丢弃事件选择（当前无进行中的事件）", option_text)
+        return jsonify({"ok": False, "error": "no active event"}), 409
+    if sent_id and sent_id != active_event.get("id"):
+        log_op("warn", "丢弃过期的事件选择",
+               "选项=%s, 来自事件=%s, 当前事件=%s" % (option_text, sent_id, active_event.get("id")))
+        return jsonify({"ok": False, "error": "stale event choice"}), 409
 
     with _lock:
         player_choices_log.append({
@@ -1229,5 +1274,8 @@ if __name__ == "__main__":
         else:
             log("[警告] --https 但证书不存在, 回退 http")
     proto = "https" if ssl_ctx else "http"
+    if USING_DEFAULT_CREDENTIALS:
+        log("[安全] 正在使用默认口令（ACCESS_KEY / BASIC_PASS = 123456）。"
+            "对外暴露或长期运行前，请在 .env 中改成强口令。")
     print("服务启动: %s://%s:%d/  AI模型=%s  串口=%s(ok=%s)" % (proto, args.host, args.port, DEEPSEEK_MODEL, SERIAL_PORT, serial_link.ok))
     app.run(host=args.host, port=args.port, ssl_context=ssl_ctx, threaded=True)

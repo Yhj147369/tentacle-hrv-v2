@@ -32,6 +32,12 @@
  *  - 修正心率特征解析：按 0x2A37 位标志读取心率(1/2 字节)与 RR-Interval(1/1024 秒→毫秒)，
  *    修复旧实现「心率 16 位时 IBI 字节与心率重叠」「用 len>=4 代替 bit4 判断 RR 存在」
  *    导致 IBI 恒错、后端 HRV 基线失效的问题。
+ *  - 新增断线检测：3.x 的 BLE 客户端不会自动复位我方状态，旧逻辑一旦连上就永远认为
+ *    「还连着」——手环自动关机/玩具休眠后既不再重连也不再上报，后端 HRV 静默失效。
+ *    现改为在 loop() 中用 isConnected() 轮询，掉线即复位标志并重连。
+ *  - 串口改为非阻塞行缓冲轮询：旧实现每轮只 readStringUntil 一行，而 BLE 扫描会阻塞
+ *    3 秒，期间到达的多条指令只能排队、甚至丢失（尤其跟在 SET 后面的 STOP）。
+ *    现每轮把已到达的字节全部取走并按 '\n' 切分，且绝不解析半行。
  */
 
 #include <BLEDevice.h>
@@ -72,6 +78,9 @@ BLERemoteCharacteristic* hrChar = nullptr;
 BLERemoteCharacteristic* toyChar = nullptr;
 BLEClient* hrClient = nullptr;
 BLEClient* toyClient = nullptr;
+
+// 串口行缓冲：非阻塞地累积字节，遇到 '\n' 才作为一条完整指令交给 handleSerialCommand
+String serialBuf = "";
 
 // ===== 时长自动停止（非阻塞，基于 millis） =====
 unsigned long stopAtMillis = 0;   // 计划自动停止的时刻（毫秒）
@@ -294,26 +303,60 @@ void scanToy() {
 
 void setup() {
   Serial.begin(115200);
-  Serial.setTimeout(50);  // 缩短 readStringUntil 的阻塞等待，保证主循环与定时停止及时
+  Serial.setTimeout(50);  // 仍在其它同步读取路径上缩短阻塞等待
   BLEDevice::init("ESP32_Bridge");
   scanHR();
   scanToy();
+}
+
+// 断线检测：arduino-esp32 3.x 的 BLEClient 不会回调我们的标志位，必须自己轮询 isConnected()。
+// 不复位的话，手环关机或玩具休眠后 hrConnected/toyConnected 永远为 true：
+// 既不重连，也不再上报心率 —— 后端会以为「手环没数据」，HRV 与熔断层静默失效且无任何日志。
+void maintainConnections() {
+  if (hrConnected && (hrClient == nullptr || !hrClient->isConnected())) {
+    hrConnected = false;
+    hrChar = nullptr;
+    Serial.println("⚠️ 手环连接已断开，稍后重连");
+  }
+  if (toyConnected && (toyClient == nullptr || !toyClient->isConnected())) {
+    toyConnected = false;
+    toyChar = nullptr;
+    Serial.println("⚠️ 玩具连接已断开，稍后重连");
+  }
+}
+
+// 非阻塞串口轮询：把本轮已到达的字节全部取走，按 '\n' 切分成完整指令。
+// 旧实现每轮只处理一行，而 scanHR()/scanToy() 会阻塞 3 秒 + delay(1000)，
+// 扫描窗口内到达的多条指令要排队好几轮，甚至因为 UART 缓冲有限而丢失
+// （最危险的是紧跟在 SET 后面的 STOP）。
+void pollSerial() {
+  int budget = 512;   // 单轮最多消费 512 字节，防止指令洪水把 BLE 维护饿死
+  while (budget-- > 0 && Serial.available() > 0) {
+    int c = Serial.read();
+    if (c < 0) break;
+    if (c == '\n') {
+      String line = serialBuf;
+      serialBuf = "";
+      handleSerialCommand(line);
+    } else if (c != '\r') {
+      if (serialBuf.length() < 128) serialBuf += (char)c;   // 畸形超长行直接截断，不吃满内存
+    }
+  }
 }
 
 void loop() {
   // 1) 每轮先检查定时停止，尽量准时
   checkAutoStop();
 
-  // 2) BLE 连接维护
+  // 2) BLE 连接维护（先剔除已掉线的连接，再尝试重连）
+  maintainConnections();
   if (doConnectHR && !hrConnected) { connectHR(); doConnectHR = false; }
   if (!hrConnected && hrDevice) { scanHR(); delay(1000); }
   if (doConnectToy && !toyConnected) { connectToy(); doConnectToy = false; }
   if (!toyConnected && toyDevice) { scanToy(); delay(1000); }
 
-  // 3) 串口指令解析
-  if (Serial.available()) {
-    String cmd = Serial.readStringUntil('\n');
-    handleSerialCommand(cmd);
-  }
+  // 3) 串口指令解析（非阻塞，一轮可处理多条完整指令）
+  pollSerial();
+
   delay(10);
 }

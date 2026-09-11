@@ -284,6 +284,12 @@
   var ttsEnabled = false;
   var lastAiText = '';
   var audioPlayer = new Audio();
+  var ttsBlobUrl = null;
+  // blob URL 不回收会一直占内存（每轮朗读一个），播完即释放
+  audioPlayer.addEventListener('ended', function () {
+    if (ttsBlobUrl) { URL.revokeObjectURL(ttsBlobUrl); ttsBlobUrl = null; }
+    audioPlayer.removeAttribute('src');
+  });
 
   // ====== 认证 key 支持 ======
   var accessKey = new URLSearchParams(window.location.search).get('key') || '';
@@ -428,7 +434,17 @@
     btnStart.disabled = false; btnStop.disabled = true;
     setStatus('已停止');
     if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
-    if (audioContext) audioContext.close();
+    if (audioContext) { audioContext.close(); audioContext = null; }
+  }
+
+  function intervalSeconds() {
+    // 输入框的 min/max 只在表单校验时生效；这里必须自己钳制，
+    // 否则填 -5 会让 setInterval(…, -5000) 被浏览器当作 0ms → 狂刷上传与录音请求。
+    var n = Number(intervalInput.value);
+    if (!isFinite(n) || n < 1) n = 1;
+    if (n > 30) n = 30;
+    intervalInput.value = n;
+    return n;
   }
 
   function scheduleUpload() {
@@ -437,7 +453,7 @@
       uploadOnce();
       uploadAudioFeatures();
       recordAndUploadAudio();
-    }, Number(intervalInput.value || 3) * 1000);
+    }, intervalSeconds() * 1000);
   }
 
   function capture() {
@@ -450,16 +466,21 @@
   async function uploadOnce() {
     if (uploading) return;
     uploading = true;
+    // 没有超时保护时，服务端一旦挂起，uploading 会永久为 true，此后所有帧被静默丢弃
+    var ctrl = new AbortController();
+    var guard = setTimeout(function () { ctrl.abort(); }, 15000);
     try {
       var blob = await capture();
       var fd = new FormData();
       fd.append('image', blob, 'frame.jpg');
-      var resp = await fetch(withKey('/upload'), { method: 'POST', body: fd });
+      var resp = await fetch(withKey('/upload'), { method: 'POST', body: fd, signal: ctrl.signal });
       var j = await resp.json();
       upTime.textContent = new Date().toLocaleTimeString();
-      setStatus(j.ok ? '上传中…' : '上传失败: ' + (j.error || resp.status));
-    } catch (e) { setStatus('上传错误: ' + e.message); }
-    finally { uploading = false; }
+      setStatus(j.ok ? '已上传' : '上传失败: ' + (j.error || resp.status));
+    } catch (e) {
+      setStatus(e.name === 'AbortError' ? '上传超时（>15s）' : '上传错误: ' + e.message);
+    }
+    finally { clearTimeout(guard); uploading = false; }
   }
 
   btnStart.addEventListener('click', startCamera);
@@ -512,42 +533,63 @@
   var eventTimeoutSeconds = 15;
   var activeEventId = null;
 
+  function clearEventTimer() {
+    if (eventTimerInterval) { clearInterval(eventTimerInterval); eventTimerInterval = null; }
+  }
+
   function showEvent(evt) {
+    // 必须先清掉上一个弹窗可能还在跑的倒计时，否则会出两个连锁 bug：
+    //   ① 旧闭包归零时替**旧事件**提交一次随机选择；
+    //   ② 旧闭包 clearInterval 清掉的是新弹窗的定时器 → 新弹窗倒计时冻结、永不超时。
+    clearEventTimer();
     activeEventId = evt.id;
+    var evtId = evt.id;
+    var options = evt.options || [];
     document.getElementById('event-title').textContent = evt.title;
     document.getElementById('event-desc').textContent = evt.description;
     document.getElementById('event-risk').textContent = evt.risk_reward || '';
     var optsDiv = document.getElementById('event-options');
     optsDiv.innerHTML = '';
-    evt.options.forEach(function(opt) {
+    options.forEach(function(opt) {
       var btn = document.createElement('button');
       btn.textContent = opt.text;
-      btn.onclick = function() { chooseEventOption(opt.text); };
+      btn.onclick = function() { chooseEventOption(opt.text, evtId); };
       optsDiv.appendChild(btn);
     });
     document.getElementById('event-overlay').classList.remove('hidden');
 
+    if (!options.length) {
+      // 事件池被改坏（无选项）时不要启动倒计时：否则每秒抛 TypeError 且弹窗永不关闭
+      document.getElementById('event-timer').textContent = '该事件没有可选项，等待下一轮';
+      console.warn('事件 ' + evtId + ' 缺少 options，已跳过自动选择');
+      return;
+    }
+
     var remaining = eventTimeoutSeconds;
     document.getElementById('event-timer').textContent = '剩余 ' + remaining + ' 秒';
     eventTimerInterval = setInterval(function() {
+      // 双保险：弹窗已被新事件替换时，旧倒计时直接退场
+      if (evtId !== activeEventId) { clearEventTimer(); return; }
       remaining--;
       document.getElementById('event-timer').textContent = '剩余 ' + remaining + ' 秒';
       if (remaining <= 0) {
-        clearInterval(eventTimerInterval);
-        var randomOpt = evt.options[Math.floor(Math.random() * evt.options.length)];
-        chooseEventOption(randomOpt.text);
+        clearEventTimer();
+        var randomOpt = options[Math.floor(Math.random() * options.length)];
+        chooseEventOption(randomOpt.text, evtId);
       }
     }, 1000);
   }
 
-  async function chooseEventOption(optionText) {
-    clearInterval(eventTimerInterval);
+  async function chooseEventOption(optionText, eventId) {
+    clearEventTimer();
+    var id = eventId || activeEventId;
     document.getElementById('event-overlay').classList.add('hidden');
     try {
       var resp = await fetch(withKey('/api/event_choice'), {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({option: optionText})
+        // 带上事件 id：服务端据此丢弃「迟到/过期」的选择，避免把它记到下一个事件上
+        body: JSON.stringify({option: optionText, event_id: id})
       });
       var j = await resp.json();
       if (!j.ok) console.warn('事件选项提交失败:', j.error);
@@ -568,9 +610,11 @@
       });
       if (!resp.ok) throw new Error('TTS请求失败');
       const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
-      audioPlayer.src = url;
-      audioPlayer.play();
+      // 上一段音频的 blob URL 必须先撤销：否则每轮朗读都会永久泄漏一份
+      if (ttsBlobUrl) { URL.revokeObjectURL(ttsBlobUrl); ttsBlobUrl = null; }
+      ttsBlobUrl = URL.createObjectURL(blob);
+      audioPlayer.src = ttsBlobUrl;
+      audioPlayer.play().catch(function (e) { console.warn('TTS 播放失败（可能未交互或音色不可用）:', e); });
     } catch (e) {
       console.warn('TTS失败:', e);
     }
@@ -701,6 +745,7 @@
   var ambientGain = null;
   var ambientNoiseSource = null;
   var ambientNoiseGain = null;
+  var ambientCtx = null;
 
   document.getElementById('ambient-enabled').addEventListener('change', function(e) {
     ambientEnabled = e.target.checked;
@@ -714,7 +759,11 @@
   function startAmbient() {
     if (ambientOscillator) return;
     try {
-      var ctx = new (window.AudioContext || window.webkitAudioContext)();
+      // 必须把 ctx 存到外层变量：它是要被 close() 的资源（以前是局部变量，
+      // 一旦 stopAmbient 拿不到引用，反复开关就会持续泄漏 AudioContext，
+      // 浏览器上限约 6 个之后就再也建不出来，且异常被 catch 吞掉、只在控制台留一行警告）
+      ambientCtx = new (window.AudioContext || window.webkitAudioContext)();
+      var ctx = ambientCtx;
       ambientOscillator = ctx.createOscillator();
       ambientOscillator.type = 'sine';
       ambientOscillator.frequency.value = 220;
@@ -745,15 +794,17 @@
     try {
       if (ambientOscillator) { ambientOscillator.stop(); ambientOscillator = null; }
       if (ambientNoiseSource) { ambientNoiseSource.stop(); ambientNoiseSource = null; }
-      if (ambientGain) { ambientGain.gain.value = 0; }
-      if (ambientNoiseGain) { ambientNoiseGain.gain.value = 0; }
+      if (ambientGain) { ambientGain.gain.value = 0; ambientGain = null; }
+      if (ambientNoiseGain) { ambientNoiseGain.gain.value = 0; ambientNoiseGain = null; }
+      if (ambientCtx) { ambientCtx.close(); ambientCtx = null; }
     } catch(e) {}
   }
 
   function updateAmbient(hr, lastCommand) {
-    if (!ambientEnabled || !ambientOscillator || !ambientGain) return;
+    if (!ambientEnabled || !ambientOscillator || !ambientGain || !ambientCtx) return;
     var freq, vol, noiseVol;
-    if (hr === null || hr === undefined) {
+    // hr=0 与 hr=null 同义（无数据）：以前 0 会落到「正常」档，和状态栏把 0 显示成「-」不一致
+    if (hr === null || hr === undefined || hr === 0) {
       freq = 180; vol = 0.02; noiseVol = 0.005;
     } else if (hr > 130) {
       freq = 440; vol = 0.12; noiseVol = 0.08;
@@ -771,9 +822,11 @@
       }
     }
     try {
-      ambientOscillator.frequency.value = freq;
-      ambientGain.gain.value = vol;
-      if (ambientNoiseGain) ambientNoiseGain.gain.value = noiseVol;
+      // 用 setTargetAtTime 渐变代替瞬时赋值：避免档位切换时的爆音/拉链噪声
+      var now = ambientCtx.currentTime;
+      ambientOscillator.frequency.setTargetAtTime(freq, now, 0.5);
+      ambientGain.gain.setTargetAtTime(vol, now, 0.3);
+      if (ambientNoiseGain) ambientNoiseGain.gain.setTargetAtTime(noiseVol, now, 0.3);
     } catch(e) {}
   }
 
