@@ -34,3 +34,6 @@ server_stderr.log
 
 # 视觉工具截图工件
 .dsh-vision-router/
+
+# 本地私有接续摘要（含明文密钥，禁止提交）
+*.local.md
